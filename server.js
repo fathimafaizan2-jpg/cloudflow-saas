@@ -25,7 +25,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 const STARTER_AI_LIMIT = 50; // 50 Free AI Replies included with $3 Starter Pass
 
 // -------------------------------------------------------------
-// AUTHENTICATION MIDDLEWARE (UPDATED FOR URL TOKENS)
+// AUTHENTICATION MIDDLEWARE
 // -------------------------------------------------------------
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -175,8 +175,8 @@ app.post('/api/checkout/starter-pass', authenticateToken, async (req, res) => {
         },
       ],
       mode: 'payment',
-      success_url: `${req.protocol}://${req.get('host')}/?payment=starter_success`,
-      cancel_url: `${req.protocol}://${req.get('host')}/?payment=cancel`,
+      success_url: `https://${req.get('host')}/?payment=starter_success`,
+      cancel_url: `https://${req.get('host')}/?payment=cancel`,
       client_reference_id: req.user.userId,
     });
 
@@ -206,8 +206,8 @@ app.post('/api/checkout/pro-plan', authenticateToken, async (req, res) => {
         },
       ],
       mode: 'subscription',
-      success_url: `${req.protocol}://${req.get('host')}/?payment=pro_success`,
-      cancel_url: `${req.protocol}://${req.get('host')}/?payment=cancel`,
+      success_url: `https://${req.get('host')}/?payment=pro_success`,
+      cancel_url: `https://${req.get('host')}/?payment=cancel`,
       client_reference_id: req.user.userId,
     });
 
@@ -219,11 +219,12 @@ app.post('/api/checkout/pro-plan', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 5. INSTAGRAM OAUTH REDIRECT FLOW
+// 5. INSTAGRAM OAUTH REDIRECT FLOW (ENFORCED HTTPS)
 // -------------------------------------------------------------
 app.get('/api/auth/instagram', authenticateToken, (req, res) => {
   const appId = process.env.META_APP_ID || 'YOUR_META_APP_ID';
-  const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/instagram/callback`;
+  // Strictly enforce https:// for Meta security compliance
+  const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
   const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata';
   
   const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}`;
