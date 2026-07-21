@@ -25,11 +25,16 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 const STARTER_AI_LIMIT = 50; // 50 Free AI Replies included with $3 Starter Pass
 
 // -------------------------------------------------------------
-// AUTHENTICATION MIDDLEWARE
+// AUTHENTICATION MIDDLEWARE (UPDATED FOR URL TOKENS)
 // -------------------------------------------------------------
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  let token = authHeader && authHeader.split(' ')[1];
+
+  // Allow token from URL Query string for direct browser navigation (OAuth redirect)
+  if (!token && req.query.token) {
+    token = req.query.token;
+  }
 
   if (!token) return res.status(401).json({ error: 'Access denied. Please log in.' });
 
@@ -214,7 +219,7 @@ app.post('/api/checkout/pro-plan', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 5. INSTAGRAM OAUTH OAUTH REDIRECT FLOW
+// 5. INSTAGRAM OAUTH REDIRECT FLOW
 // -------------------------------------------------------------
 app.get('/api/auth/instagram', authenticateToken, (req, res) => {
   const appId = process.env.META_APP_ID || 'YOUR_META_APP_ID';
@@ -227,7 +232,6 @@ app.get('/api/auth/instagram', authenticateToken, (req, res) => {
 });
 
 app.get('/api/auth/instagram/callback', (req, res) => {
-  // Callback logic handles access token swap upon approval
   res.redirect('/?meta_connect=success');
 });
 

@@ -50,10 +50,10 @@
           <h3 class="font-bold text-white text-base">Instagram Account Status</h3>
           <p class="text-xs text-slate-400 mt-1">Connect your Instagram Business Page to start responding to DMs automatically.</p>
         </div>
-        <a href="/api/auth/instagram" class="bg-gradient-to-r from-pink-500 to-purple-600 hover:opacity-90 text-white text-xs font-bold px-5 py-3 rounded-xl shadow-md transition flex items-center space-x-2">
+        <button onclick="connectInstagram()" class="bg-gradient-to-r from-pink-500 to-purple-600 hover:opacity-90 text-white text-xs font-bold px-5 py-3 rounded-xl shadow-md transition flex items-center space-x-2">
           <span>📸</span>
           <span>Connect Instagram Page</span>
-        </a>
+        </button>
       </div>
 
       <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row justify-between items-center gap-4">
@@ -154,6 +154,15 @@
         document.getElementById('usage-text').innerText = `${data.usageCount} / ${data.aiLimit} Smart AI Replies Used`;
         renderRules(data.rules);
       }
+    }
+
+    function connectInstagram() {
+      const token = localStorage.getItem('cloudflow_token');
+      if (!token) {
+        alert('Please log in first!');
+        return;
+      }
+      window.location.href = `/api/auth/instagram?token=${token}`;
     }
 
     function renderRules(rules) {
