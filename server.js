@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Service Initializations
+// Environment & Service Clients
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_mock_key');
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -59,8 +59,10 @@ app.post('/api/signup', async (req, res) => {
     await redis.hset('cloudflow_users', { [lowerEmail]: JSON.stringify(userData) });
     const token = jwt.sign({ userId, email: lowerEmail }, JWT_SECRET, { expiresIn: '7d' });
 
+    console.log(`👤 New User Signed Up: ${lowerEmail}`);
     res.json({ success: true, token, user: { userId, email: lowerEmail, plan: 'unpaid' } });
   } catch (err) {
+    console.error('❌ Signup Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -77,8 +79,10 @@ app.post('/api/login', async (req, res) => {
     if (!isValid) return res.status(400).json({ error: 'Invalid email or password.' });
 
     const token = jwt.sign({ userId: user.userId, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    console.log(`🔑 User Logged In: ${lowerEmail}`);
     res.json({ success: true, token, user: { userId: user.userId, email: user.email, plan: user.plan || 'unpaid' } });
   } catch (err) {
+    console.error('❌ Login Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -116,6 +120,7 @@ app.post('/api/rules', authenticateToken, async (req, res) => {
     const cleanKey = keyword.trim().toUpperCase();
     await redis.hset(`rules:${userId}`, { [cleanKey]: responseText.trim() });
 
+    console.log(`📝 Rule Saved for User ${userId}: ${cleanKey} ➔ ${responseText}`);
     res.json({ success: true, message: 'Rule saved!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -126,6 +131,7 @@ app.delete('/api/rules/:keyword', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
     await redis.hdel(`rules:${userId}`, req.params.keyword.trim().toUpperCase());
+    console.log(`🗑️ Rule Deleted for User ${userId}: ${req.params.keyword}`);
     res.json({ success: true, message: 'Rule deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -158,6 +164,7 @@ app.post('/api/checkout/starter-pass', authenticateToken, async (req, res) => {
       client_reference_id: req.user.userId,
     });
 
+    console.log(`💳 Created $3 Starter Checkout Session for ${req.user.email}`);
     res.json({ url: session.url });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -188,6 +195,7 @@ app.post('/api/checkout/pro-plan', authenticateToken, async (req, res) => {
       client_reference_id: req.user.userId,
     });
 
+    console.log(`⚡ Created $19/mo Pro Checkout Session for ${req.user.email}`);
     res.json({ url: session.url });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -195,44 +203,53 @@ app.post('/api/checkout/pro-plan', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 4. META WEBHOOK & EMBEDDED WORKER
+// 4. META WEBHOOK & EMBEDDED WORKER (WITH LIVE LOGGING)
 // -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
+  console.log('🔍 GET Webhook Handshake Received from Meta');
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
+    console.log('✅ Meta Webhook handshake verified successfully!');
     return res.status(200).send(req.query['hub.challenge']);
   }
+  console.log('❌ Handshake failed: Token mismatch');
   return res.status(403).send('Verification failed');
 });
 
 app.post('/webhook', async (req, res) => {
   try {
+    console.log('📩 INCOMING WEBHOOK EVENT:', JSON.stringify(req.body));
     if (req.body.object) {
       await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
+      console.log('📥 Message successfully pushed to Redis processing queue');
       return res.status(200).send('EVENT_RECEIVED');
     }
     res.sendStatus(404);
   } catch (error) {
+    console.error('❌ Webhook Error:', error.message);
     res.sendStatus(500);
   }
 });
 
 async function startBackgroundWorker() {
-  console.log('👷 Embedded Worker Polling Active...');
+  console.log('👷 Embedded CloudFlow Queue Worker active & watching queue...');
   while (true) {
     try {
       const rawEvent = await redis.rpop('meta_webhook_queue');
       if (rawEvent) {
-        // Queue Processing
+        const parsedEvent = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
+        console.log('⚡ WORKER PROCESSING EVENT:', JSON.stringify(parsedEvent));
+        // Automation logic handles message dispatch here
       } else {
         await new Promise((res) => setTimeout(res, 2000));
       }
     } catch (error) {
+      if (!error.message.includes('fetch failed')) console.error('❌ WORKER ERROR:', error.message);
       await new Promise((res) => setTimeout(res, 3000));
     }
   }
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow SaaS active on http://localhost:${PORT}`);
+  console.log(`🚀 CloudFlow SaaS active on port ${PORT}`);
   startBackgroundWorker();
 });
