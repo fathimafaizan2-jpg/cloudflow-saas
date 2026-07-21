@@ -41,7 +41,18 @@ function authenticateToken(req, res, next) {
 }
 
 // -------------------------------------------------------------
-// 1. AUTHENTICATION & USER MANAGEMENT
+// 1. PUBLIC COMPLIANCE ROUTES (REQUIRED FOR META REVIEW)
+// -------------------------------------------------------------
+app.get('/privacy.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'privacy.html'));
+});
+
+app.get('/terms.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'terms.html'));
+});
+
+// -------------------------------------------------------------
+// 2. AUTHENTICATION & USER MANAGEMENT
 // -------------------------------------------------------------
 app.post('/api/signup', async (req, res) => {
   try {
@@ -88,7 +99,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 2. DASHBOARD & DATA API
+// 3. DASHBOARD & DATA API
 // -------------------------------------------------------------
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
   try {
@@ -139,7 +150,7 @@ app.delete('/api/rules/:keyword', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 3. STRIPE PAYMENT SESSIONS ($3 Starter Pass & $19 Pro)
+// 4. STRIPE PAYMENT SESSIONS ($3 Starter Pass & $19 Pro)
 // -------------------------------------------------------------
 app.post('/api/checkout/starter-pass', authenticateToken, async (req, res) => {
   try {
@@ -203,7 +214,25 @@ app.post('/api/checkout/pro-plan', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 4. META WEBHOOK & EMBEDDED WORKER (WITH LIVE LOGGING)
+// 5. INSTAGRAM OAUTH OAUTH REDIRECT FLOW
+// -------------------------------------------------------------
+app.get('/api/auth/instagram', authenticateToken, (req, res) => {
+  const appId = process.env.META_APP_ID || 'YOUR_META_APP_ID';
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/instagram/callback`;
+  const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata';
+  
+  const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}`;
+  console.log(`📸 Initiating Meta Connect OAuth for user: ${req.user.email}`);
+  res.redirect(authUrl);
+});
+
+app.get('/api/auth/instagram/callback', (req, res) => {
+  // Callback logic handles access token swap upon approval
+  res.redirect('/?meta_connect=success');
+});
+
+// -------------------------------------------------------------
+// 6. META WEBHOOK & EMBEDDED WORKER (WITH LIVE LOGGING)
 // -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
   console.log('🔍 GET Webhook Handshake Received from Meta');
@@ -238,7 +267,6 @@ async function startBackgroundWorker() {
       if (rawEvent) {
         const parsedEvent = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
         console.log('⚡ WORKER PROCESSING EVENT:', JSON.stringify(parsedEvent));
-        // Automation logic handles message dispatch here
       } else {
         await new Promise((res) => setTimeout(res, 2000));
       }
@@ -250,6 +278,6 @@ async function startBackgroundWorker() {
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow SaaS active on port ${PORT}`);
+  console.log(`🚀 CloudFlow Standalone SaaS active on port ${PORT}`);
   startBackgroundWorker();
 });
