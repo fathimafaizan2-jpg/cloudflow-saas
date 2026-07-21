@@ -193,7 +193,7 @@ app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 4. INSTAGRAM OAUTH & MULTI-ACCOUNT CAP ENFORCEMENT
+// 4. INSTAGRAM OAUTH & TOKEN EXCHANGE (UPGRADED)
 // -------------------------------------------------------------
 app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
   try {
@@ -205,7 +205,6 @@ app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
     const connectedCount = Object.keys(userPages).length;
     const maxAccounts = user?.maxAccounts || 1;
 
-    // Enforce Tier Account Limit
     if (connectedCount >= maxAccounts) {
       return res.redirect(`/?error=account_limit_reached&limit=${maxAccounts}`);
     }
@@ -213,8 +212,6 @@ app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
     const appId = process.env.META_APP_ID;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
     const state = Buffer.from(JSON.stringify({ userId })).toString('base64');
-    
-    // RESTORED FULL INSTAGRAM SCOPES
     const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata,pages_show_list';
 
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
@@ -224,8 +221,50 @@ app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
   }
 });
 
+// Complete Token Exchange & Account Lookup Route
 app.get('/api/auth/instagram/callback', async (req, res) => {
-  res.redirect('/?meta_connect=success');
+  try {
+    const { code, state } = req.query;
+    if (!code) return res.status(400).send('Authorization code missing from Meta.');
+
+    const decodedState = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+    const userId = decodedState.userId;
+
+    const appId = process.env.META_APP_ID;
+    const appSecret = process.env.META_APP_SECRET || '';
+    const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
+
+    // 1. Exchange OAuth Code for User Access Token
+    const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
+    const tokenRes = await fetch(tokenUrl);
+    const tokenData = await tokenRes.json();
+
+    if (tokenData.error) {
+      console.error('❌ Token Exchange Error:', tokenData.error);
+      return res.redirect('/?error=token_exchange_failed');
+    }
+
+    const userAccessToken = tokenData.access_token;
+
+    // 2. Fetch Connected Facebook Pages & Page Tokens
+    const pagesUrl = `https://graph.facebook.com/v19.0/me/accounts?access_token=${userAccessToken}`;
+    const pagesRes = await fetch(pagesUrl);
+    const pagesData = await pagesRes.json();
+
+    if (pagesData.data && pagesData.data.length > 0) {
+      for (const page of pagesData.data) {
+        // Save Page Token & Link Page to User in Upstash Redis
+        await redis.hset('page_tokens', { [page.id]: page.access_token });
+        await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
+        console.log(`✅ Linked Facebook Page "${page.name}" (#${page.id}) to User ${userId}`);
+      }
+    }
+
+    res.redirect('/?meta_connect=success');
+  } catch (err) {
+    console.error('❌ OAuth Callback Failed:', err.message);
+    res.redirect('/?error=oauth_processing_error');
+  }
 });
 
 // -------------------------------------------------------------
@@ -250,9 +289,9 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Background queue processor for incoming comments
+// Background queue processor
 async function startBackgroundWorker() {
-  console.log('👷 CloudFlow Post & Multi-Tenant Worker Running...');
+  console.log('👷 CloudFlow Queue Worker Active...');
   while (true) {
     try {
       const rawEvent = await redis.rpop('meta_webhook_queue');
@@ -264,8 +303,6 @@ async function startBackgroundWorker() {
             if (change.field === 'comments') {
               const mediaId = change.value.media?.id;
               const commentText = change.value.text;
-              const commentId = change.value.id;
-
               console.log(`💬 Comment Received on Media #${mediaId}: "${commentText}"`);
             }
           }
