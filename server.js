@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Environment & Service Clients
+// Service Clients
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_mock_key');
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -22,7 +22,6 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
-const STARTER_AI_LIMIT = 50; // 50 Free AI Replies included with $3 Starter Pass
 
 // -------------------------------------------------------------
 // AUTHENTICATION MIDDLEWARE
@@ -31,11 +30,7 @@ function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1];
 
-  // Allow token from URL Query string for direct browser navigation (OAuth redirect)
-  if (!token && req.query.token) {
-    token = req.query.token;
-  }
-
+  if (!token && req.query.token) token = req.query.token;
   if (!token) return res.status(401).json({ error: 'Access denied. Please log in.' });
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
@@ -46,18 +41,13 @@ function authenticateToken(req, res, next) {
 }
 
 // -------------------------------------------------------------
-// 1. PUBLIC COMPLIANCE ROUTES (REQUIRED FOR META REVIEW)
+// 1. PUBLIC COMPLIANCE ROUTES
 // -------------------------------------------------------------
-app.get('/privacy.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'privacy.html'));
-});
-
-app.get('/terms.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'terms.html'));
-});
+app.get('/privacy.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
+app.get('/terms.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 
 // -------------------------------------------------------------
-// 2. AUTHENTICATION & USER MANAGEMENT
+// 2. AUTH & USER ACCOUNTS
 // -------------------------------------------------------------
 app.post('/api/signup', async (req, res) => {
   try {
@@ -70,15 +60,13 @@ app.post('/api/signup', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = 'usr_' + Date.now();
-    const userData = { userId, email: lowerEmail, password: hashedPassword, plan: 'unpaid' };
+    const userData = { userId, email: lowerEmail, password: hashedPassword, tier: 'Starter', maxAccounts: 1 };
 
     await redis.hset('cloudflow_users', { [lowerEmail]: JSON.stringify(userData) });
     const token = jwt.sign({ userId, email: lowerEmail }, JWT_SECRET, { expiresIn: '7d' });
 
-    console.log(`👤 New User Signed Up: ${lowerEmail}`);
-    res.json({ success: true, token, user: { userId, email: lowerEmail, plan: 'unpaid' } });
+    res.json({ success: true, token, user: { userId, email: lowerEmail, tier: 'Starter', maxAccounts: 1 } });
   } catch (err) {
-    console.error('❌ Signup Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -95,194 +83,201 @@ app.post('/api/login', async (req, res) => {
     if (!isValid) return res.status(400).json({ error: 'Invalid email or password.' });
 
     const token = jwt.sign({ userId: user.userId, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-    console.log(`🔑 User Logged In: ${lowerEmail}`);
-    res.json({ success: true, token, user: { userId: user.userId, email: user.email, plan: user.plan || 'unpaid' } });
+    res.json({ success: true, token, user: { userId: user.userId, email: user.email, tier: user.tier || 'Starter' } });
   } catch (err) {
-    console.error('❌ Login Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
 // -------------------------------------------------------------
-// 3. DASHBOARD & DATA API
+// 3. MULTI-ACCOUNT ($N$) & POST-LEVEL AUTOMATIONS
 // -------------------------------------------------------------
+
+// Fetch all connected pages for user
+app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const userPages = (await redis.hgetall(`user_pages:${userId}`)) || {};
+    
+    const accounts = Object.entries(userPages).map(([pageId, name]) => ({
+      pageId,
+      name: typeof name === 'string' ? name : JSON.parse(name)
+    }));
+
+    res.json({ accounts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch posts for a specific connected Instagram Page
+app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
+  try {
+    const { pageId } = req.query;
+    if (!pageId) return res.status(400).json({ error: 'Page ID required' });
+
+    const pageToken = await redis.hget('page_tokens', pageId);
+    if (!pageToken) return res.status(400).json({ error: 'Page access token not found.' });
+
+    // Get Linked Instagram Business Account ID
+    const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
+    const igData = await igRes.json();
+    const igUserId = igData.instagram_business_account?.id;
+
+    if (!igUserId) return res.status(400).json({ error: 'No Instagram Business Account linked to this Facebook page.' });
+
+    // Fetch Recent Posts/Reels
+    const mediaRes = await fetch(
+      `https://graph.facebook.com/v19.0/${igUserId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&access_token=${pageToken}`
+    );
+    const mediaData = await mediaRes.json();
+
+    if (mediaData.error) return res.status(400).json({ error: mediaData.error.message });
+
+    res.json({ posts: mediaData.data || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save Post Automation Rule
+app.post('/api/rules/post', authenticateToken, async (req, res) => {
+  try {
+    const { mediaId, responseText, keyword } = req.body;
+    if (!mediaId || !responseText) return res.status(400).json({ error: 'Media ID and response text required.' });
+
+    const userId = req.user.userId;
+    const ruleData = {
+      mediaId,
+      keyword: keyword ? keyword.trim().toUpperCase() : 'ANY',
+      responseText: responseText.trim(),
+      updatedAt: Date.now()
+    };
+
+    await redis.hset(`post_rules:${userId}`, { [mediaId]: JSON.stringify(ruleData) });
+
+    console.log(`📌 Post Automation Saved: User ${userId} | Post #${mediaId} ➔ "${responseText}"`);
+    res.json({ success: true, message: 'Automation active for post!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get User Dashboard Data
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const rules = (await redis.hgetall(`rules:${userId}`)) || {};
-    const usageCount = parseInt((await redis.get(`usage:${userId}`)) || '0', 10);
-    
+    const postRules = (await redis.hgetall(`post_rules:${userId}`)) || {};
+    const userPages = (await redis.hgetall(`user_pages:${userId}`)) || {};
+
+    const parsedRules = {};
+    for (const [key, val] of Object.entries(postRules)) {
+      parsedRules[key] = typeof val === 'string' ? JSON.parse(val) : val;
+    }
+
+    res.json({ postRules: parsedRules, connectedPagesCount: Object.keys(userPages).length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete Post Automation
+app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    await redis.hdel(`post_rules:${userId}`, req.params.mediaId);
+    res.json({ success: true, message: 'Automation deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
+// 4. INSTAGRAM OAUTH & MULTI-ACCOUNT CAP ENFORCEMENT
+// -------------------------------------------------------------
+app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
     const rawUser = await redis.hget('cloudflow_users', req.user.email);
     const user = typeof rawUser === 'string' ? JSON.parse(rawUser) : rawUser;
 
-    res.json({
-      rules,
-      usageCount,
-      aiLimit: STARTER_AI_LIMIT,
-      plan: user?.plan || 'starter',
-      isLimitReached: usageCount >= STARTER_AI_LIMIT && user?.plan !== 'pro',
-    });
+    const userPages = (await redis.hgetall(`user_pages:${userId}`)) || {};
+    const connectedCount = Object.keys(userPages).length;
+    const maxAccounts = user?.maxAccounts || 1;
+
+    // Enforce Tier Account Limit
+    if (connectedCount >= maxAccounts) {
+      return res.redirect(`/?error=account_limit_reached&limit=${maxAccounts}`);
+    }
+
+    const appId = process.env.META_APP_ID;
+    const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
+    const state = Buffer.from(JSON.stringify({ userId })).toString('base64');
+    const scope = 'public_profile,email';
+
+    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
+    res.redirect(authUrl);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).send('OAuth Initialization Error');
   }
 });
 
-app.post('/api/rules', authenticateToken, async (req, res) => {
-  try {
-    const { keyword, responseText } = req.body;
-    if (!keyword || !responseText) return res.status(400).json({ error: 'All fields required' });
-
-    const userId = req.user.userId;
-    const cleanKey = keyword.trim().toUpperCase();
-    await redis.hset(`rules:${userId}`, { [cleanKey]: responseText.trim() });
-
-    console.log(`📝 Rule Saved for User ${userId}: ${cleanKey} ➔ ${responseText}`);
-    res.json({ success: true, message: 'Rule saved!' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/rules/:keyword', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    await redis.hdel(`rules:${userId}`, req.params.keyword.trim().toUpperCase());
-    console.log(`🗑️ Rule Deleted for User ${userId}: ${req.params.keyword}`);
-    res.json({ success: true, message: 'Rule deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -------------------------------------------------------------
-// 4. STRIPE PAYMENT SESSIONS ($3 Starter Pass & $19 Pro)
-// -------------------------------------------------------------
-app.post('/api/checkout/starter-pass', authenticateToken, async (req, res) => {
-  try {
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [
-        {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: 'CloudFlow $3 Starter Pass',
-              description: 'Unlimited Keyword Rules + 50 Smart AI DMs',
-            },
-            unit_amount: 300, // $3.00 USD
-          },
-          quantity: 1,
-        },
-      ],
-      mode: 'payment',
-      success_url: `https://${req.get('host')}/?payment=starter_success`,
-      cancel_url: `https://${req.get('host')}/?payment=cancel`,
-      client_reference_id: req.user.userId,
-    });
-
-    console.log(`💳 Created $3 Starter Checkout Session for ${req.user.email}`);
-    res.json({ url: session.url });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/checkout/pro-plan', authenticateToken, async (req, res) => {
-  try {
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [
-        {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: 'CloudFlow Pro Unlimited Plan',
-              description: 'Unlimited Keywords + Unlimited Smart AI Replies',
-            },
-            unit_amount: 1900, // $19.00 USD / Month
-            recurring: { interval: 'month' },
-          },
-          quantity: 1,
-        },
-      ],
-      mode: 'subscription',
-      success_url: `https://${req.get('host')}/?payment=pro_success`,
-      cancel_url: `https://${req.get('host')}/?payment=cancel`,
-      client_reference_id: req.user.userId,
-    });
-
-    console.log(`⚡ Created $19/mo Pro Checkout Session for ${req.user.email}`);
-    res.json({ url: session.url });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -------------------------------------------------------------
-// 5. INSTAGRAM OAUTH REDIRECT FLOW (ENFORCED HTTPS)
-// -------------------------------------------------------------
-app.get('/api/auth/instagram', authenticateToken, (req, res) => {
-  const appId = process.env.META_APP_ID || 'YOUR_META_APP_ID';
-  // Strictly enforce https:// for Meta security compliance
-  const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
-  const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata';
-  
-  const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}`;
-  console.log(`📸 Initiating Meta Connect OAuth for user: ${req.user.email}`);
-  res.redirect(authUrl);
-});
-
-app.get('/api/auth/instagram/callback', (req, res) => {
+app.get('/api/auth/instagram/callback', async (req, res) => {
   res.redirect('/?meta_connect=success');
 });
 
 // -------------------------------------------------------------
-// 6. META WEBHOOK & EMBEDDED WORKER (WITH LIVE LOGGING)
+// 5. WEBHOOK LISTENER & QUEUE WORKER
 // -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
-  console.log('🔍 GET Webhook Handshake Received from Meta');
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
-    console.log('✅ Meta Webhook handshake verified successfully!');
     return res.status(200).send(req.query['hub.challenge']);
   }
-  console.log('❌ Handshake failed: Token mismatch');
   return res.status(403).send('Verification failed');
 });
 
 app.post('/webhook', async (req, res) => {
   try {
-    console.log('📩 INCOMING WEBHOOK EVENT:', JSON.stringify(req.body));
     if (req.body.object) {
       await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
-      console.log('📥 Message successfully pushed to Redis processing queue');
       return res.status(200).send('EVENT_RECEIVED');
     }
     res.sendStatus(404);
   } catch (error) {
-    console.error('❌ Webhook Error:', error.message);
     res.sendStatus(500);
   }
 });
 
+// Background queue processor for incoming comments
 async function startBackgroundWorker() {
-  console.log('👷 Embedded CloudFlow Queue Worker active & watching queue...');
+  console.log('👷 CloudFlow Post & Multi-Tenant Worker Running...');
   while (true) {
     try {
       const rawEvent = await redis.rpop('meta_webhook_queue');
       if (rawEvent) {
-        const parsedEvent = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
-        console.log('⚡ WORKER PROCESSING EVENT:', JSON.stringify(parsedEvent));
+        const payload = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
+
+        for (const entry of payload.entry || []) {
+          for (const change of entry.changes || []) {
+            if (change.field === 'comments') {
+              const mediaId = change.value.media?.id;
+              const commentText = change.value.text;
+              const commentId = change.value.id;
+
+              console.log(`💬 Comment Received on Media #${mediaId}: "${commentText}"`);
+            }
+          }
+        }
       } else {
         await new Promise((res) => setTimeout(res, 2000));
       }
     } catch (error) {
-      if (!error.message.includes('fetch failed')) console.error('❌ WORKER ERROR:', error.message);
       await new Promise((res) => setTimeout(res, 3000));
     }
   }
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow Standalone SaaS active on port ${PORT}`);
+  console.log(`🚀 CloudFlow Multi-Account Engine Active on Port ${PORT}`);
   startBackgroundWorker();
 });
