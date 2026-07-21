@@ -22,11 +22,14 @@
 
     <div id="auth-section" class="max-w-md mx-auto mt-16 p-8 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl">
       <h2 class="text-2xl font-bold text-center mb-6">Welcome to CloudFlow</h2>
-      <div class="space-y-4">
-        <input type="email" id="auth-email" placeholder="you@company.com" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm">
-        <input type="password" id="auth-password" placeholder="••••••••" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm">
-        <button onclick="handleAuth()" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium text-sm">Sign In / Sign Up</button>
-      </div>
+      <div id="auth-error" class="hidden mb-4 p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-xl"></div>
+      <form onsubmit="event.preventDefault(); handleAuth();" class="space-y-4">
+        <input type="email" id="auth-email" placeholder="you@company.com" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
+        <input type="password" id="auth-password" placeholder="••••••••" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
+        <button type="submit" id="auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium text-sm transition">
+          Sign In / Sign Up
+        </button>
+      </form>
     </div>
 
     <div id="dashboard-section" class="hidden max-w-5xl mx-auto p-6 space-y-8 mt-4">
@@ -92,18 +95,54 @@
     let selectedMediaId = null;
 
     async function handleAuth() {
-      const email = document.getElementById('auth-email').value;
-      const password = document.getElementById('auth-password').value;
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-      const data = await res.json();
-      if (data.token) {
-        localStorage.setItem('cloudflow_token', data.token);
-        localStorage.setItem('cloudflow_email', email);
-        initDashboard();
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-password').value.trim();
+      const authBtn = document.getElementById('auth-btn');
+      const errorBox = document.getElementById('auth-error');
+
+      if (!email || !password) {
+        errorBox.innerText = 'Please enter both email and password.';
+        errorBox.classList.remove('hidden');
+        return;
+      }
+
+      errorBox.classList.add('hidden');
+      authBtn.innerText = 'Processing...';
+      authBtn.disabled = true;
+
+      try {
+        // Try Login First
+        let res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        let data = await res.json();
+
+        // If Login fails, try Signup automatically
+        if (!data.token) {
+          res = await fetch('/api/signup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+          });
+          data = await res.json();
+        }
+
+        if (data.token) {
+          localStorage.setItem('cloudflow_token', data.token);
+          localStorage.setItem('cloudflow_email', email);
+          initDashboard();
+        } else {
+          errorBox.innerText = data.error || 'Authentication failed. Please try again.';
+          errorBox.classList.remove('hidden');
+        }
+      } catch (err) {
+        errorBox.innerText = 'Network error. Please check connection.';
+        errorBox.classList.remove('hidden');
+      } finally {
+        authBtn.innerText = 'Sign In / Sign Up';
+        authBtn.disabled = false;
       }
     }
 
