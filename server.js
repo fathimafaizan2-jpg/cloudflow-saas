@@ -213,7 +213,9 @@ app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
     const appId = process.env.META_APP_ID;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
     const state = Buffer.from(JSON.stringify({ userId })).toString('base64');
-    const scope = 'public_profile,email';
+    
+    // RESTORED FULL INSTAGRAM SCOPES
+    const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata,pages_show_list';
 
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
     res.redirect(authUrl);
