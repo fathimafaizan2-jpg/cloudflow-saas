@@ -1,218 +1,238 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const Stripe = require('stripe');
 const { Redis } = require('@upstash/redis');
 const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 app.use(express.json());
-
-// Serve static frontend dashboard from the /public folder
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Initialize Upstash Redis Client
+// Service Initializations
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_mock_key');
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
-
-// Initialize Gemini AI Client
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
-const DB_KEY = 'cloudflow_rules_v1';
+const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
+const STARTER_AI_LIMIT = 50; // 50 Free AI Replies included with $3 Starter Pass
 
 // -------------------------------------------------------------
-// 1. API ROUTES FOR DASHBOARD RULE MANAGEMENT
+// AUTHENTICATION MIDDLEWARE
 // -------------------------------------------------------------
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
 
-// Fetch all rules stored in Redis
-app.get('/api/rules', async (req, res) => {
+  if (!token) return res.status(401).json({ error: 'Access denied. Please log in.' });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Session expired. Log in again.' });
+    req.user = user;
+    next();
+  });
+}
+
+// -------------------------------------------------------------
+// 1. AUTHENTICATION & USER MANAGEMENT
+// -------------------------------------------------------------
+app.post('/api/signup', async (req, res) => {
   try {
-    const rules = await redis.hgetall(DB_KEY);
-    res.json({ rules: rules || {} });
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+    const lowerEmail = email.toLowerCase().trim();
+    const existing = await redis.hget('cloudflow_users', lowerEmail);
+    if (existing) return res.status(400).json({ error: 'Account already exists.' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = 'usr_' + Date.now();
+    const userData = { userId, email: lowerEmail, password: hashedPassword, plan: 'unpaid' };
+
+    await redis.hset('cloudflow_users', { [lowerEmail]: JSON.stringify(userData) });
+    const token = jwt.sign({ userId, email: lowerEmail }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({ success: true, token, user: { userId, email: lowerEmail, plan: 'unpaid' } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Save a new keyword rule
-app.post('/api/rules', async (req, res) => {
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const lowerEmail = email.toLowerCase().trim();
+    const rawUser = await redis.hget('cloudflow_users', lowerEmail);
+    if (!rawUser) return res.status(400).json({ error: 'Invalid email or password.' });
+
+    const user = typeof rawUser === 'string' ? JSON.parse(rawUser) : rawUser;
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) return res.status(400).json({ error: 'Invalid email or password.' });
+
+    const token = jwt.sign({ userId: user.userId, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ success: true, token, user: { userId: user.userId, email: user.email, plan: user.plan || 'unpaid' } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
+// 2. DASHBOARD & DATA API
+// -------------------------------------------------------------
+app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const rules = (await redis.hgetall(`rules:${userId}`)) || {};
+    const usageCount = parseInt((await redis.get(`usage:${userId}`)) || '0', 10);
+    
+    const rawUser = await redis.hget('cloudflow_users', req.user.email);
+    const user = typeof rawUser === 'string' ? JSON.parse(rawUser) : rawUser;
+
+    res.json({
+      rules,
+      usageCount,
+      aiLimit: STARTER_AI_LIMIT,
+      plan: user?.plan || 'starter',
+      isLimitReached: usageCount >= STARTER_AI_LIMIT && user?.plan !== 'pro',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/rules', authenticateToken, async (req, res) => {
   try {
     const { keyword, responseText } = req.body;
-    if (!keyword || !responseText) {
-      return res.status(400).json({ error: 'Keyword and Response required' });
-    }
+    if (!keyword || !responseText) return res.status(400).json({ error: 'All fields required' });
 
+    const userId = req.user.userId;
     const cleanKey = keyword.trim().toUpperCase();
-    const cleanValue = responseText.trim();
+    await redis.hset(`rules:${userId}`, { [cleanKey]: responseText.trim() });
 
-    await redis.hset(DB_KEY, { [cleanKey]: cleanValue });
-    console.log(`📌 SAVED TO REDIS: "${cleanKey}" ➔ "${cleanValue}"`);
-
-    res.json({ success: true, message: 'Rule saved successfully!' });
+    res.json({ success: true, message: 'Rule saved!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Delete a single rule
-app.delete('/api/rules/:keyword', async (req, res) => {
+app.delete('/api/rules/:keyword', authenticateToken, async (req, res) => {
   try {
-    const { keyword } = req.params;
-    await redis.hdel(DB_KEY, keyword.trim().toUpperCase());
-    res.json({ success: true, message: 'Rule deleted successfully' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Clear all rules
-app.delete('/api/rules-clear-all', async (req, res) => {
-  try {
-    await redis.del(DB_KEY);
-    console.log('🧹 REDIS RULES WIPED CLEAN!');
-    res.json({ success: true, message: 'All rules wiped' });
+    const userId = req.user.userId;
+    await redis.hdel(`rules:${userId}`, req.params.keyword.trim().toUpperCase());
+    res.json({ success: true, message: 'Rule deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // -------------------------------------------------------------
-// 2. META WEBHOOK ENDPOINTS
+// 3. STRIPE PAYMENT SESSIONS ($3 Starter Pass & $19 Pro)
 // -------------------------------------------------------------
+app.post('/api/checkout/starter-pass', authenticateToken, async (req, res) => {
+  try {
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'CloudFlow $3 Starter Pass',
+              description: 'Unlimited Keyword Rules + 50 Smart AI DMs',
+            },
+            unit_amount: 300, // $3.00 USD
+          },
+          quantity: 1,
+        },
+      ],
+      mode: 'payment',
+      success_url: `${req.protocol}://${req.get('host')}/?payment=starter_success`,
+      cancel_url: `${req.protocol}://${req.get('host')}/?payment=cancel`,
+      client_reference_id: req.user.userId,
+    });
 
-// Verification endpoint for Meta / Instagram Developer setup
+    res.json({ url: session.url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/checkout/pro-plan', authenticateToken, async (req, res) => {
+  try {
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'CloudFlow Pro Unlimited Plan',
+              description: 'Unlimited Keywords + Unlimited Smart AI Replies',
+            },
+            unit_amount: 1900, // $19.00 USD / Month
+            recurring: { interval: 'month' },
+          },
+          quantity: 1,
+        },
+      ],
+      mode: 'subscription',
+      success_url: `${req.protocol}://${req.get('host')}/?payment=pro_success`,
+      cancel_url: `${req.protocol}://${req.get('host')}/?payment=cancel`,
+      client_reference_id: req.user.userId,
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
+// 4. META WEBHOOK & EMBEDDED WORKER
+// -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log('✅ META WEBHOOK VERIFIED!');
-    return res.status(200).send(challenge);
+  if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
+    return res.status(200).send(req.query['hub.challenge']);
   }
   return res.status(403).send('Verification failed');
 });
 
-// Webhook listener - Queues incoming messages into Redis
 app.post('/webhook', async (req, res) => {
   try {
-    const body = req.body;
-    console.log('📩 RECEIVED WEBHOOK PAYLOAD:', JSON.stringify(body));
-
-    if (body.object) {
-      await redis.lpush('meta_webhook_queue', JSON.stringify(body));
-      console.log('⚡ EVENT QUEUED IN REDIS REAL-TIME!');
+    if (req.body.object) {
+      await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
       return res.status(200).send('EVENT_RECEIVED');
     }
     res.sendStatus(404);
   } catch (error) {
-    console.error('❌ REDIS QUEUE ERROR:', error.message);
     res.sendStatus(500);
   }
 });
 
-// -------------------------------------------------------------
-// 3. BACKGROUND QUEUE WORKER (Embedded Process)
-// -------------------------------------------------------------
-
-// Fallback AI generation using Gemini AI
-async function generateAIReply(userMessage) {
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      contents: `You are a helpful customer support bot for CloudFlow SaaS. Keep replies under 2 sentences, friendly, and concise. User text: "${userMessage}"`,
-    });
-    return response.text;
-  } catch (err) {
-    console.error('❌ AI Generation Error:', err.message);
-    return 'Thanks for reaching out! We will get back to you shortly.';
-  }
-}
-
-// Process popped events from the Redis queue
-async function processEvent(event) {
-  console.log('\n⚙️ PROCESSING QUEUED EVENT:');
-
-  if (event.entry && event.entry.length > 0) {
-    for (const entry of event.entry) {
-      if (entry.messaging) {
-        for (const messageObj of entry.messaging) {
-          const senderId = messageObj.sender?.id;
-          const rawText = messageObj.message?.text?.trim();
-
-          if (!rawText) continue;
-
-          const cleanKeyword = rawText.toUpperCase();
-          console.log(`💬 Message from [${senderId}]: "${rawText}"`);
-
-          const allRules = (await redis.hgetall(DB_KEY)) || {};
-          let matchedResponse = allRules[cleanKeyword];
-
-          // Substring matching fallback
-          if (!matchedResponse) {
-            for (const key of Object.keys(allRules)) {
-              if (cleanKeyword.includes(key)) {
-                matchedResponse = allRules[key];
-                break;
-              }
-            }
-          }
-
-          if (matchedResponse) {
-            console.log(`⚡ INSTANT RULE MATCHED FOR "${cleanKeyword}"!`);
-            console.log(`📄 Auto-Response Delivered: "${matchedResponse}"\n`);
-          } else {
-            console.log(`🔍 No keyword match in Redis. Forwarding to Gemini AI...`);
-            const aiReply = await generateAIReply(rawText);
-            console.log(`🤖 AI Generated Reply: "${aiReply}"\n`);
-          }
-        }
-      }
-    }
-  }
-}
-
-// Continuous worker loop with silent network reconnection
 async function startBackgroundWorker() {
-  console.log('👷 Embedded CloudFlow Queue Worker started...');
-
+  console.log('👷 Embedded Worker Polling Active...');
   while (true) {
     try {
       const rawEvent = await redis.rpop('meta_webhook_queue');
-
       if (rawEvent) {
-        const parsedEvent = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
-        await processEvent(parsedEvent);
+        // Queue Processing
       } else {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((res) => setTimeout(res, 2000));
       }
     } catch (error) {
-      // Suppress noisy network fetch timeout logs from spamming terminal output
-      if (!error.message.includes('fetch failed')) {
-        console.error('❌ WORKER ERROR:', error.message);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await new Promise((res) => setTimeout(res, 3000));
     }
   }
 }
 
-// -------------------------------------------------------------
-// 4. PROCESS SAFETY & SERVER STARTUP
-// -------------------------------------------------------------
-
-process.on('uncaughtException', (err) => {
-  console.error('💥 UNCAUGHT EXCEPTION:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 UNHANDLED REJECTION:', reason);
-});
-
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow Server active on http://localhost:${PORT}`);
-  // Launch the background queue processing loop on boot
+  console.log(`🚀 CloudFlow SaaS active on http://localhost:${PORT}`);
   startBackgroundWorker();
 });

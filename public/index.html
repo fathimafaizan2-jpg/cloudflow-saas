@@ -1,286 +1,220 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full bg-slate-100 text-slate-800">
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>CloudFlow - Auto DM Reply</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CloudFlow SaaS - $3 Starter Instagram AI Automation</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/lucide@latest"></script>
 </head>
-<body class="h-full flex flex-col font-sans antialiased bg-slate-50 text-slate-900">
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
 
-  <header class="border-b border-slate-200 bg-white sticky top-0 z-50 px-8 py-4 flex justify-between items-center shadow-sm">
+  <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-6 py-4 flex justify-between items-center">
     <div class="flex items-center space-x-3">
-      <div class="bg-indigo-600 p-2.5 rounded-2xl text-white shadow-md shadow-indigo-200">
-        <i data-lucide="send" class="w-6 h-6"></i>
+      <div class="w-9 h-9 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-white text-xl">⚡</div>
+      <span class="text-xl font-bold tracking-tight text-white">CloudFlow <span class="text-indigo-400 text-xs px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">SaaS</span></span>
+    </div>
+    <div id="user-nav" class="hidden flex items-center space-x-4">
+      <span id="user-email" class="text-xs text-slate-400"></span>
+      <button onclick="logout()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">Logout</button>
+    </div>
+  </nav>
+
+  <div id="auth-section" class="max-w-md mx-auto mt-16 p-8 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl">
+    <div class="text-center mb-6">
+      <h2 id="auth-title" class="text-2xl font-bold">Welcome to CloudFlow</h2>
+      <p class="text-xs text-indigo-400 mt-1 font-medium">🎟️ $3 One-Time Starter Pass • Unlimited Keywords + 50 AI Replies</p>
+    </div>
+    
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Email Address</label>
+        <input type="email" id="auth-email" placeholder="you@company.com" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
       </div>
       <div>
-        <h1 class="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-          CloudFlow <span class="text-indigo-600 font-semibold text-xs bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 rounded-full">Auto-Responder</span>
-        </h1>
-        <p class="text-xs text-slate-500">Automatically send links & files to your Instagram & Facebook followers</p>
+        <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Password</label>
+        <input type="password" id="auth-password" placeholder="••••••••" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
+      </div>
+      <button onclick="handleAuth()" id="auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium text-sm transition">Sign In</button>
+      <p class="text-xs text-center text-slate-400 mt-4">
+        <span id="auth-toggle-text">Don't have an account?</span> 
+        <button onclick="toggleAuthMode()" class="text-indigo-400 underline font-medium ml-1" id="auth-toggle-btn">Sign Up</button>
+      </p>
+    </div>
+  </div>
+
+  <div id="dashboard-section" class="hidden max-w-5xl mx-auto p-6 space-y-8">
+    
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row justify-between items-center gap-4">
+      <div>
+        <h3 class="font-bold text-lg text-white">Your Automation Credits</h3>
+        <p class="text-xs text-slate-400 mt-1">Unlimited keyword rules active. Smart Gemini AI handles natural questions.</p>
+        <div class="w-64 bg-slate-800 rounded-full h-2.5 mt-3 overflow-hidden">
+          <div id="usage-bar" class="bg-indigo-500 h-2.5 rounded-full" style="width: 0%"></div>
+        </div>
+        <p id="usage-text" class="text-xs text-slate-400 mt-1">0 / 50 Smart AI Replies Used</p>
+      </div>
+
+      <div class="flex gap-2">
+        <button onclick="buyStarterPass()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2.5 rounded-xl text-xs transition border border-slate-700">
+          🎟️ Get $3 Pass (50 AI Replies)
+        </button>
+        <button onclick="upgradePro()" class="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-medium px-5 py-2.5 rounded-xl text-xs transition shadow-lg shadow-indigo-500/20">
+          ⚡ Upgrade to Pro ($19/mo)
+        </button>
       </div>
     </div>
 
-    <div class="flex items-center space-x-3">
-      <div class="flex items-center space-x-2 bg-emerald-50 border border-emerald-200 px-3.5 py-1.5 rounded-full">
-        <span class="relative flex h-2.5 w-2.5">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-        </span>
-        <span class="text-xs font-semibold text-emerald-700">Bot Active & Watching</span>
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <h3 class="font-bold text-lg text-white">Add Keyword Automation</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <input type="text" id="rule-keyword" placeholder="Keyword (e.g. PRICING, PDF, LINK)" class="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
+        <input type="text" id="rule-response" placeholder="Response text or Link" class="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
       </div>
-
-      <div class="bg-amber-50 border border-amber-200 text-amber-800 px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 shadow-sm">
-        <i data-lucide="award" class="w-4 h-4 text-amber-500"></i> Lifetime Account
-      </div>
+      <button onclick="saveRule()" class="bg-indigo-600 hover:bg-indigo-500 px-6 py-2.5 rounded-xl text-sm font-medium text-white transition">Save Rule</button>
     </div>
-  </header>
 
-  <main class="flex-1 p-8 max-w-7xl w-full mx-auto space-y-8">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+      <h3 class="font-bold text-lg text-white mb-4">Active Rules</h3>
+      <div id="rules-list" class="space-y-3"></div>
+    </div>
 
-    <section class="grid grid-cols-1 sm:grid-cols-3 gap-6">
-      <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-between">
-        <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Keyword Rules</p>
-          <h3 id="stat-rules-count" class="text-3xl font-extrabold text-slate-900 mt-1">0</h3>
-        </div>
-        <div class="p-3.5 bg-indigo-50 border border-indigo-100 text-indigo-600 rounded-2xl">
-          <i data-lucide="key-round" class="w-7 h-7"></i>
-        </div>
-      </div>
+    <div class="border-t border-slate-800/80 pt-6 text-center text-xs text-slate-500 space-y-1">
+      <p>🔒 <strong>Official Meta Integration:</strong> Fully compliant with Instagram & Facebook API standards.</p>
+      <p>💳 <strong>Payment Guarantee:</strong> CloudFlow does <u>not</u> store any payment card details on our servers. All transactions are securely encrypted by Stripe.</p>
+    </div>
 
-      <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-between">
-        <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Monthly AI Responses</p>
-          <h3 class="text-3xl font-extrabold text-slate-900 mt-1">500 <span class="text-sm font-normal text-slate-400">left</span></h3>
-        </div>
-        <div class="p-3.5 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-2xl">
-          <i data-lucide="sparkles" class="w-7 h-7"></i>
-        </div>
-      </div>
-
-      <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-between">
-        <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Instagram Connection</p>
-          <h3 class="text-base font-bold text-emerald-600 mt-1 flex items-center gap-1">
-            <i data-lucide="check-circle-2" class="w-5 h-5"></i> Connected
-          </h3>
-        </div>
-        <div class="p-3.5 bg-blue-50 border border-blue-100 text-blue-600 rounded-2xl">
-          <i data-lucide="instagram" class="w-7 h-7"></i>
-        </div>
-      </div>
-    </section>
-
-    <section class="grid grid-cols-1 lg:grid-cols-12 gap-8">
-
-      <div class="lg:col-span-5 bg-white border border-slate-200 rounded-2xl p-7 shadow-sm space-y-6">
-        <div class="border-b border-slate-100 pb-4">
-          <h2 class="text-lg font-bold text-slate-900 flex items-center gap-2">
-            <i data-lucide="plus-circle" class="w-5 h-5 text-indigo-600"></i> Create Auto-DM Rule
-          </h2>
-          <p class="text-xs text-slate-500 mt-1">
-            Set up an automatic reply whenever a follower DMs you a specific word.
-          </p>
-        </div>
-
-        <form id="rule-form" onsubmit="saveRule(event)" class="space-y-5">
-          <div>
-            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">When someone DMs you this word:</label>
-            <div class="relative">
-              <input type="text" id="keyword-input" placeholder="e.g. PDF" required 
-                     class="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-base font-bold text-indigo-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 uppercase tracking-widest">
-            </div>
-            <p class="text-xs text-slate-400 mt-1.5">It works regardless of capitalization (e.g., "pdf" or "Pdf").</p>
-          </div>
-
-          <div>
-            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">Send them this reply or link:</label>
-            <textarea id="response-input" rows="4" placeholder="Here is your download link: https://your-website.com/file.pdf" required
-                      class="w-full bg-slate-50 border border-slate-300 rounded-xl p-4 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 leading-relaxed"></textarea>
-          </div>
-
-          <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm py-3 px-4 rounded-xl transition shadow-md shadow-indigo-100 flex items-center justify-center gap-2 active:scale-[0.99]">
-            <i data-lucide="save" class="w-4 h-4"></i> Save Automation
-          </button>
-        </form>
-
-        <div class="pt-4 border-t border-slate-100">
-          <button onclick="sendTestPayload()" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs py-2.5 px-3 rounded-xl transition flex items-center justify-center gap-2 border border-slate-200">
-            <i data-lucide="play" class="w-4 h-4 text-emerald-600"></i> Test Bot with "PDF" DM
-          </button>
-        </div>
-      </div>
-
-      <div class="lg:col-span-7 space-y-6">
-
-        <div class="bg-white border border-slate-200 rounded-2xl p-7 shadow-sm space-y-4">
-          <div class="flex justify-between items-center border-b border-slate-100 pb-4">
-            <h2 class="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <i data-lucide="folder-check" class="w-5 h-5 text-indigo-600"></i> Your Active Automations
-            </h2>
-            <div class="flex items-center space-x-3">
-              <button onclick="fetchRules()" class="text-xs text-slate-500 hover:text-indigo-600 flex items-center gap-1 transition font-medium">
-                <i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i> Refresh
-              </button>
-              <button onclick="clearAllRules()" class="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 transition font-medium">
-                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Clear All
-              </button>
-            </div>
-          </div>
-
-          <div id="rules-container" class="space-y-3 max-h-56 overflow-y-auto pr-1">
-            <div class="text-xs text-slate-400 italic">Loading your saved rules...</div>
-          </div>
-        </div>
-
-        <div class="bg-white border border-slate-200 rounded-2xl p-7 shadow-sm space-y-4">
-          <div class="flex justify-between items-center border-b border-slate-100 pb-3">
-            <h2 class="text-sm font-bold text-slate-800 flex items-center gap-2">
-              <i data-lucide="activity" class="w-4 h-4 text-emerald-500"></i> Live Bot Activity Log
-            </h2>
-            <button onclick="clearLogs()" class="text-xs text-slate-400 hover:text-slate-600">Clear</button>
-          </div>
-
-          <div id="console-output" class="p-4 bg-slate-50 rounded-xl border border-slate-200 font-mono text-xs space-y-2 text-slate-700 max-h-48 overflow-y-auto">
-            <div class="text-slate-400 italic">[System Ready] Watching for incoming messages...</div>
-          </div>
-        </div>
-
-      </div>
-    </section>
-  </main>
+  </div>
 
   <script>
-    lucide.createIcons();
+    let isSignUp = false;
 
-    // Fetch saved rules
-    async function fetchRules() {
-      const container = document.getElementById('rules-container');
-      const countLabel = document.getElementById('stat-rules-count');
+    function toggleAuthMode() {
+      isSignUp = !isSignUp;
+      document.getElementById('auth-title').innerText = isSignUp ? 'Create CloudFlow Account' : 'Welcome to CloudFlow';
+      document.getElementById('auth-btn').innerText = isSignUp ? 'Sign Up' : 'Sign In';
+      document.getElementById('auth-toggle-text').innerText = isSignUp ? 'Already have an account?' : "Don't have an account?";
+      document.getElementById('auth-toggle-btn').innerText = isSignUp ? 'Sign In' : 'Sign Up';
+    }
 
-      try {
-        const res = await fetch('/api/rules');
-        const data = await res.json();
+    async function handleAuth() {
+      const email = document.getElementById('auth-email').value;
+      const password = document.getElementById('auth-password').value;
+      const endpoint = isSignUp ? '/api/signup' : '/api/login';
 
-        if (data.rules && Object.keys(data.rules).length > 0) {
-          const keys = Object.keys(data.rules);
-          countLabel.innerText = keys.length;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
 
-          container.innerHTML = keys.map(key => `
-            <div class="bg-slate-50 border border-slate-200 p-4 rounded-xl flex justify-between items-start gap-4 hover:border-slate-300 transition">
-              <div class="space-y-1">
-                <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">The Keyword is:</span>
-                  <span class="bg-indigo-600 text-white text-xs font-extrabold px-2.5 py-1 rounded-md tracking-wider">
-                    ${key}
-                  </span>
-                </div>
-                <p class="text-sm text-slate-800 font-medium leading-relaxed mt-1">
-                  <span class="text-slate-400 font-normal">Auto-Reply:</span> "${data.rules[key]}"
-                </p>
-              </div>
-              <button onclick="deleteRule('${key}')" class="text-slate-400 hover:text-red-500 p-1.5 transition rounded-lg hover:bg-red-50">
-                <i data-lucide="trash-2" class="w-4 h-4"></i>
-              </button>
+      if (data.success) {
+        localStorage.setItem('cloudflow_token', data.token);
+        localStorage.setItem('cloudflow_email', email);
+        initDashboard();
+      } else {
+        alert(data.error || 'Auth failed');
+      }
+    }
+
+    async function initDashboard() {
+      const token = localStorage.getItem('cloudflow_token');
+      if (!token) return;
+
+      document.getElementById('auth-section').classList.add('hidden');
+      document.getElementById('dashboard-section').classList.remove('hidden');
+      document.getElementById('user-nav').classList.remove('hidden');
+      document.getElementById('user-email').innerText = localStorage.getItem('cloudflow_email');
+
+      const res = await fetch('/api/dashboard-data', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        const percent = Math.min((data.usageCount / data.aiLimit) * 100, 100);
+        document.getElementById('usage-bar').style.width = `${percent}%`;
+        document.getElementById('usage-text').innerText = `${data.usageCount} / ${data.aiLimit} Smart AI Replies Used`;
+        renderRules(data.rules);
+      }
+    }
+
+    function renderRules(rules) {
+      const container = document.getElementById('rules-list');
+      container.innerHTML = '';
+      const keys = Object.keys(rules || {});
+
+      if (keys.length === 0) {
+        container.innerHTML = '<p class="text-xs text-slate-500 italic">No rules created yet.</p>';
+        return;
+      }
+
+      keys.forEach(key => {
+        container.innerHTML += `
+          <div class="flex justify-between items-center p-3 bg-slate-950 border border-slate-800 rounded-xl">
+            <div>
+              <span class="text-xs font-bold bg-indigo-500/10 text-indigo-400 px-2 py-1 rounded-md uppercase mr-2">${key}</span>
+              <span class="text-sm text-slate-300">➔ ${rules[key]}</span>
             </div>
-          `).join('');
-          lucide.createIcons();
-        } else {
-          countLabel.innerText = '0';
-          container.innerHTML = `<div class="text-xs text-slate-500 italic p-4 border border-dashed border-slate-200 rounded-xl text-center bg-slate-50">No rules set up yet. Type a keyword on the left to start!</div>`;
-        }
-      } catch (err) {
-        container.innerHTML = `<div class="text-xs text-red-500 p-2">Error loading rules: ${err.message}</div>`;
-      }
+            <button onclick="deleteRule('${key}')" class="text-xs text-red-400 hover:text-red-300">Delete</button>
+          </div>
+        `;
+      });
     }
 
-    // Save rule
-    async function saveRule(e) {
-      e.preventDefault();
-      const keyword = document.getElementById('keyword-input').value.trim();
-      const responseText = document.getElementById('response-input').value.trim();
-      const consoleOut = document.getElementById('console-output');
+    async function saveRule() {
+      const keyword = document.getElementById('rule-keyword').value;
+      const responseText = document.getElementById('rule-response').value;
+      const token = localStorage.getItem('cloudflow_token');
 
-      try {
-        const res = await fetch('/api/rules', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keyword, responseText })
-        });
+      await fetch('/api/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ keyword, responseText })
+      });
 
-        if (res.ok) {
-          const time = new Date().toLocaleTimeString();
-          consoleOut.innerHTML += `<div class="text-emerald-600 font-semibold">[${time}] ✅ Automation active for keyword "${keyword.toUpperCase()}"!</div>`;
-          document.getElementById('rule-form').reset();
-          fetchRules();
-        }
-      } catch (err) {
-        consoleOut.innerHTML += `<div class="text-red-500">[Error] Could not save rule: ${err.message}</div>`;
-      }
-      consoleOut.scrollTop = consoleOut.scrollHeight;
+      document.getElementById('rule-keyword').value = '';
+      document.getElementById('rule-response').value = '';
+      initDashboard();
     }
 
-    // Delete single rule
     async function deleteRule(keyword) {
-      try {
-        await fetch(`/api/rules/${keyword}`, { method: 'DELETE' });
-        fetchRules();
-      } catch (err) {
-        console.error('Delete error:', err);
-      }
+      const token = localStorage.getItem('cloudflow_token');
+      await fetch(`/api/rules/${keyword}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      initDashboard();
     }
 
-    // Wipe all rules
-    async function clearAllRules() {
-      if (confirm('Wipe all rules?')) {
-        try {
-          await fetch('/api/rules-clear-all', { method: 'DELETE' });
-          fetchRules();
-        } catch (err) {
-          alert('Error: ' + err.message);
-        }
-      }
+    async function buyStarterPass() {
+      const token = localStorage.getItem('cloudflow_token');
+      const res = await fetch('/api/checkout/starter-pass', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
     }
 
-    // Test webhook
-    async function sendTestPayload() {
-      const consoleOut = document.getElementById('console-output');
-      const time = new Date().toLocaleTimeString();
-
-      consoleOut.innerHTML += `<div class="text-indigo-600">[${time}] 📩 Follower sent DM: "PDF"</div>`;
-      
-      try {
-        const res = await fetch('/webhook', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            object: "page",
-            entry: [{
-              id: "12345",
-              messaging: [{
-                sender: { id: "follower_01" },
-                message: { text: "PDF" }
-              }]
-            }]
-          })
-        });
-
-        if (res.ok) {
-          consoleOut.innerHTML += `<div class="text-emerald-600 font-semibold">[${time}] ✨ Event received & queued!</div>`;
-        }
-      } catch (err) {
-        consoleOut.innerHTML += `<div class="text-red-500">[${time}] Error: ${err.message}</div>`;
-      }
-      consoleOut.scrollTop = consoleOut.scrollHeight;
+    async function upgradePro() {
+      const token = localStorage.getItem('cloudflow_token');
+      const res = await fetch('/api/checkout/pro-plan', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
     }
 
-    function clearLogs() {
-      document.getElementById('console-output').innerHTML = '<div class="text-slate-400 italic">[Logs cleared]</div>';
+    function logout() {
+      localStorage.clear();
+      window.location.reload();
     }
 
-    fetchRules();
+    if (localStorage.getItem('cloudflow_token')) {
+      initDashboard();
+    }
   </script>
 </body>
 </html>
