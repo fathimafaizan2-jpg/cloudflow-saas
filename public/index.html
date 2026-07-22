@@ -51,7 +51,7 @@
             <p class="text-xs text-slate-400">Pick a connected page to load its posts, then click a thumbnail to automate.</p>
           </div>
           
-          <select id="account-dropdown" onchange="loadPosts()" class="bg-slate-950 border border-slate-800 text-xs px-4 py-2 rounded-xl text-slate-200">
+          <select id="account-dropdown" onchange="loadPosts()" class="bg-slate-950 border border-slate-800 text-xs px-4 py-2 rounded-xl text-slate-200 focus:outline-none focus:border-indigo-500">
             <option value="">-- Select Connected Account --</option>
           </select>
         </div>
@@ -94,6 +94,14 @@
   <script>
     let selectedMediaId = null;
 
+    // Capture Session Token from OAuth Callback URL if present
+    const urlParams = new URLSearchParams(window.location.search);
+    const tokenFromUrl = urlParams.get('token');
+    if (tokenFromUrl) {
+      localStorage.setItem('cloudflow_token', tokenFromUrl);
+      window.history.replaceState({}, document.title, "/");
+    }
+
     async function handleAuth() {
       const email = document.getElementById('auth-email').value.trim();
       const password = document.getElementById('auth-password').value.trim();
@@ -111,7 +119,6 @@
       authBtn.disabled = true;
 
       try {
-        // Try Login First
         let res = await fetch('/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -119,7 +126,6 @@
         });
         let data = await res.json();
 
-        // If Login fails, try Signup automatically
         if (!data.token) {
           res = await fetch('/api/signup', {
             method: 'POST',
@@ -150,7 +156,7 @@
       document.getElementById('auth-section').classList.add('hidden');
       document.getElementById('dashboard-section').classList.remove('hidden');
       document.getElementById('user-nav').classList.remove('hidden');
-      document.getElementById('user-email').innerText = localStorage.getItem('cloudflow_email');
+      document.getElementById('user-email').innerText = localStorage.getItem('cloudflow_email') || 'User';
       
       await loadConnectedAccounts();
       loadRules();
@@ -158,6 +164,8 @@
 
     async function loadConnectedAccounts() {
       const token = localStorage.getItem('cloudflow_token');
+      if (!token) return;
+
       const res = await fetch('/api/instagram/accounts', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -170,6 +178,9 @@
         data.accounts.forEach(acc => {
           dropdown.innerHTML += `<option value="${acc.pageId}">${acc.name}</option>`;
         });
+        // Auto-select first account if available
+        dropdown.selectedIndex = 1;
+        loadPosts();
       }
     }
 
@@ -183,7 +194,7 @@
         return;
       }
 
-      grid.innerHTML = '<p class="text-xs text-indigo-400 col-span-full text-center py-8">Loading posts...</p>';
+      grid.innerHTML = '<p class="text-xs text-indigo-400 col-span-full text-center py-8">Loading posts from Meta...</p>';
 
       const res = await fetch(`/api/instagram/posts?pageId=${pageId}`, {
         headers: { 'Authorization': `Bearer ${token}` }

@@ -124,7 +124,7 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
     const igData = await igRes.json();
     const igUserId = igData.instagram_business_account?.id;
 
-    if (!igUserId) return res.status(400).json({ error: 'No Instagram Business Account linked to this Facebook page.' });
+    if (!igUserId) return res.status(400).json({ error: 'No Instagram Business/Creator Account linked to this Facebook page.' });
 
     // Fetch Recent Posts/Reels
     const mediaRes = await fetch(
@@ -193,25 +193,19 @@ app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 4. INSTAGRAM OAUTH & TOKEN EXCHANGE (UPGRADED)
+// 4. INSTAGRAM OAUTH & TOKEN EXCHANGE (ROBUST LONG-LIVED EXCHANGE)
 // -------------------------------------------------------------
 app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const rawUser = await redis.hget('cloudflow_users', req.user.email);
-    const user = typeof rawUser === 'string' ? JSON.parse(rawUser) : rawUser;
-
-    const userPages = (await redis.hgetall(`user_pages:${userId}`)) || {};
-    const connectedCount = Object.keys(userPages).length;
-    const maxAccounts = user?.maxAccounts || 1;
-
-    if (connectedCount >= maxAccounts) {
-      return res.redirect(`/?error=account_limit_reached&limit=${maxAccounts}`);
-    }
+    const authHeader = req.headers['authorization'];
+    const clientJwtToken = (authHeader && authHeader.split(' ')[1]) || req.query.token;
 
     const appId = process.env.META_APP_ID;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
-    const state = Buffer.from(JSON.stringify({ userId })).toString('base64');
+    
+    // Store both userId and client JWT in the state string
+    const state = Buffer.from(JSON.stringify({ userId, token: clientJwtToken })).toString('base64');
     const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata,pages_show_list';
 
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
@@ -221,7 +215,6 @@ app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
   }
 });
 
-// Complete Token Exchange & Account Lookup Route
 app.get('/api/auth/instagram/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -229,38 +222,48 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     const decodedState = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
     const userId = decodedState.userId;
+    const userJwtToken = decodedState.token;
 
     const appId = process.env.META_APP_ID;
     const appSecret = process.env.META_APP_SECRET || '';
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
 
-    // 1. Exchange OAuth Code for User Access Token
+    // 1. Exchange short-lived OAuth code for Short-Lived User Access Token
     const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
     const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
 
     if (tokenData.error) {
       console.error('❌ Token Exchange Error:', tokenData.error);
-      return res.redirect('/?error=token_exchange_failed');
+      return res.redirect(`/?error=token_exchange_failed&token=${userJwtToken}`);
     }
 
-    const userAccessToken = tokenData.access_token;
+    const shortLivedUserToken = tokenData.access_token;
 
-    // 2. Fetch Connected Facebook Pages & Page Tokens
-    const pagesUrl = `https://graph.facebook.com/v19.0/me/accounts?access_token=${userAccessToken}`;
+    // 2. Exchange Short-Lived User Token for Long-Lived Token (60 Days)
+    const longLivedUrl = `https://graph.facebook.com/v19.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${shortLivedUserToken}`;
+    const longLivedRes = await fetch(longLivedUrl);
+    const longLivedData = await longLivedRes.json();
+    const longLivedUserToken = longLivedData.access_token || shortLivedUserToken;
+
+    // 3. Fetch Connected Facebook Pages & Long-Lived Page Tokens
+    const pagesUrl = `https://graph.facebook.com/v19.0/me/accounts?access_token=${longLivedUserToken}`;
     const pagesRes = await fetch(pagesUrl);
     const pagesData = await pagesRes.json();
 
     if (pagesData.data && pagesData.data.length > 0) {
       for (const page of pagesData.data) {
-        // Save Page Token & Link Page to User in Upstash Redis
+        // Save Permanent Page Access Token and Page Mapping to Upstash Redis
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
-        console.log(`✅ Linked Facebook Page "${page.name}" (#${page.id}) to User ${userId}`);
+        console.log(`✅ Successfully Linked Facebook/Instagram Page "${page.name}" (#${page.id}) to User ${userId}`);
       }
+    } else {
+      console.warn(`⚠️ No pages found for User ${userId}`);
     }
 
-    res.redirect('/?meta_connect=success');
+    // Redirect back to dashboard maintaining user JWT session
+    res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
   } catch (err) {
     console.error('❌ OAuth Callback Failed:', err.message);
     res.redirect('/?error=oauth_processing_error');
@@ -291,7 +294,7 @@ app.post('/webhook', async (req, res) => {
 
 // Background queue processor
 async function startBackgroundWorker() {
-  console.log('👷 CloudFlow Queue Worker Active...');
+  console.log('👷 CloudFlow Multi-Account Engine Active...');
   while (true) {
     try {
       const rawEvent = await redis.rpop('meta_webhook_queue');
@@ -317,6 +320,6 @@ async function startBackgroundWorker() {
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow Multi-Account Engine Active on Port ${PORT}`);
+  console.log(`🚀 CloudFlow Engine Active on Port ${PORT}`);
   startBackgroundWorker();
 });
