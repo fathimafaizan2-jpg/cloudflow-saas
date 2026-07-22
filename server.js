@@ -23,7 +23,9 @@ const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
+// -------------------------------------------------------------
 // AUTHENTICATION MIDDLEWARE
+// -------------------------------------------------------------
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1];
@@ -38,11 +40,15 @@ function authenticateToken(req, res, next) {
   });
 }
 
+// -------------------------------------------------------------
 // 1. PUBLIC COMPLIANCE ROUTES
+// -------------------------------------------------------------
 app.get('/privacy.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
 app.get('/terms.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 
+// -------------------------------------------------------------
 // 2. AUTH & USER ACCOUNTS
+// -------------------------------------------------------------
 app.post('/api/signup', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -83,7 +89,9 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------
 // 3. MULTI-ACCOUNT & POST-LEVEL AUTOMATIONS
+// -------------------------------------------------------------
 app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -111,7 +119,7 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
     // Fetch Media
     let mediaUrl = `https://graph.facebook.com/v19.0/${pageId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&access_token=${pageToken}`;
     
-    // Check if pageId is a Facebook Page or direct Instagram User
+    // Resolves Facebook Page vs. Direct IG Account
     const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
     const igData = await igRes.json();
     if (igData.instagram_business_account?.id) {
@@ -177,7 +185,9 @@ app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------
 // 4. DIRECT INSTAGRAM & FACEBOOK OAUTH
+// -------------------------------------------------------------
 app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -188,7 +198,6 @@ app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
     const state = Buffer.from(JSON.stringify({ userId, token: clientJwtToken })).toString('base64');
     
-    // Comprehensive scope covering both Direct Instagram & Facebook Pages
     const scope = 'instagram_basic,instagram_manage_messages,instagram_manage_comments,pages_manage_metadata,pages_show_list,business_management';
 
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
@@ -245,7 +254,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
       }
     }
 
-    // B. Direct Fallback: Fetch User's Direct Instagram Account info if Pages list was empty
+    // B. Direct Fallback: Fetch Direct Instagram Account if Pages list was empty
     if (accountsLinked === 0) {
       const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name,username&access_token=${userToken}`);
       const meData = await meRes.json();
@@ -264,7 +273,9 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
   }
 });
 
-// 5. WEBHOOK LISTENER & QUEUE WORKER
+// -------------------------------------------------------------
+// 5. WEBHOOK LISTENER & AUTOMATED DM WORKER
+// -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
     return res.status(200).send(req.query['hub.challenge']);
@@ -284,6 +295,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// Background Worker: Listens for incoming comments and fires automated DMs
 async function startBackgroundWorker() {
   console.log('👷 CloudFlow Engine Active...');
   while (true) {
@@ -291,10 +303,57 @@ async function startBackgroundWorker() {
       const rawEvent = await redis.rpop('meta_webhook_queue');
       if (rawEvent) {
         const payload = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
+
         for (const entry of payload.entry || []) {
           for (const change of entry.changes || []) {
             if (change.field === 'comments') {
-              console.log(`💬 Comment Event Received on Media #${change.value.media?.id}`);
+              const mediaId = change.value.media?.id;
+              const commentText = change.value.text || '';
+              const commenterId = change.value.from?.id;
+              const recipientId = entry.id;
+
+              console.log(`💬 Comment Received on Media #${mediaId}: "${commentText}" from User #${commenterId}`);
+
+              if (mediaId && commenterId) {
+                // Search all user rules in Redis for this mediaId
+                const allKeys = await redis.keys('post_rules:*');
+                for (const key of allKeys) {
+                  const rawRule = await redis.hget(key, mediaId);
+                  if (rawRule) {
+                    const rule = typeof rawRule === 'string' ? JSON.parse(rawRule) : rawRule;
+                    const triggerKeyword = rule.keyword ? rule.keyword.toUpperCase() : 'ANY';
+                    
+                    // Match keyword trigger
+                    if (triggerKeyword === 'ANY' || commentText.toUpperCase().includes(triggerKeyword)) {
+                      const pageToken = await redis.hget('page_tokens', recipientId);
+
+                      if (pageToken) {
+                        // Send Direct Message via Meta Graph API
+                        const sendDmRes = await fetch(`https://graph.facebook.com/v19.0/${recipientId}/messages`, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${pageToken}`
+                          },
+                          body: JSON.stringify({
+                            recipient: { id: commenterId },
+                            message: { text: rule.responseText }
+                          })
+                        });
+
+                        const sendDmData = await sendDmRes.json();
+                        if (sendDmData.message_id) {
+                          console.log(`✅ DM Sent Successfully to User #${commenterId}!`);
+                        } else {
+                          console.error(`❌ Meta DM Error:`, sendDmData.error?.message || sendDmData);
+                        }
+                      } else {
+                        console.warn(`⚠️ Token not found for recipient #${recipientId}`);
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -302,12 +361,13 @@ async function startBackgroundWorker() {
         await new Promise((res) => setTimeout(res, 2000));
       }
     } catch (error) {
+      console.error('Worker Processing Error:', error.message);
       await new Promise((res) => setTimeout(res, 3000));
     }
   }
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow Active on Port ${PORT}`);
+  console.log(`🚀 CloudFlow Engine Active on Port ${PORT}`);
   startBackgroundWorker();
 });
