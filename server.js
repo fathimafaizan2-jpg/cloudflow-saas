@@ -23,9 +23,7 @@ const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
-// -------------------------------------------------------------
 // AUTHENTICATION MIDDLEWARE
-// -------------------------------------------------------------
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1];
@@ -40,15 +38,11 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// -------------------------------------------------------------
 // 1. PUBLIC COMPLIANCE ROUTES
-// -------------------------------------------------------------
 app.get('/privacy.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
 app.get('/terms.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 
-// -------------------------------------------------------------
 // 2. AUTH & USER ACCOUNTS
-// -------------------------------------------------------------
 app.post('/api/signup', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -89,11 +83,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-// 3. MULTI-ACCOUNT ($N$) & POST-LEVEL AUTOMATIONS
-// -------------------------------------------------------------
-
-// Fetch all connected pages for user
+// 3. MULTI-ACCOUNT & POST-LEVEL AUTOMATIONS
 app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -110,7 +100,6 @@ app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
   }
 });
 
-// Fetch posts for a specific connected Instagram Page
 app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
   try {
     const { pageId } = req.query;
@@ -119,17 +108,18 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
     const pageToken = await redis.hget('page_tokens', pageId);
     if (!pageToken) return res.status(400).json({ error: 'Page access token not found.' });
 
-    // Get Linked Instagram Business Account ID
+    // Fetch Media
+    let mediaUrl = `https://graph.facebook.com/v19.0/${pageId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&access_token=${pageToken}`;
+    
+    // Check if pageId is a Facebook Page or direct Instagram User
     const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
     const igData = await igRes.json();
-    const igUserId = igData.instagram_business_account?.id;
+    if (igData.instagram_business_account?.id) {
+      const igUserId = igData.instagram_business_account.id;
+      mediaUrl = `https://graph.facebook.com/v19.0/${igUserId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&access_token=${pageToken}`;
+    }
 
-    if (!igUserId) return res.status(400).json({ error: 'No Instagram Business/Creator Account linked to this Facebook page.' });
-
-    // Fetch Recent Posts/Reels
-    const mediaRes = await fetch(
-      `https://graph.facebook.com/v19.0/${igUserId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&access_token=${pageToken}`
-    );
+    const mediaRes = await fetch(mediaUrl);
     const mediaData = await mediaRes.json();
 
     if (mediaData.error) return res.status(400).json({ error: mediaData.error.message });
@@ -140,7 +130,6 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
   }
 });
 
-// Save Post Automation Rule
 app.post('/api/rules/post', authenticateToken, async (req, res) => {
   try {
     const { mediaId, responseText, keyword } = req.body;
@@ -155,15 +144,12 @@ app.post('/api/rules/post', authenticateToken, async (req, res) => {
     };
 
     await redis.hset(`post_rules:${userId}`, { [mediaId]: JSON.stringify(ruleData) });
-
-    console.log(`📌 Post Automation Saved: User ${userId} | Post #${mediaId} ➔ "${responseText}"`);
     res.json({ success: true, message: 'Automation active for post!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get User Dashboard Data
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -181,7 +167,6 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete Post Automation
 app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -192,9 +177,7 @@ app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-// 4. INSTAGRAM OAUTH & TOKEN EXCHANGE (ROBUST LONG-LIVED EXCHANGE)
-// -------------------------------------------------------------
+// 4. DIRECT INSTAGRAM & FACEBOOK OAUTH
 app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -203,10 +186,10 @@ app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
 
     const appId = process.env.META_APP_ID;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
-    
-    // Store both userId and client JWT in the state string
     const state = Buffer.from(JSON.stringify({ userId, token: clientJwtToken })).toString('base64');
-    const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata,pages_show_list';
+    
+    // Comprehensive scope covering both Direct Instagram & Facebook Pages
+    const scope = 'instagram_basic,instagram_manage_messages,instagram_manage_comments,pages_manage_metadata,pages_show_list,business_management';
 
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
     res.redirect(authUrl);
@@ -228,7 +211,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
     const appSecret = process.env.META_APP_SECRET || '';
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
 
-    // 1. Exchange short-lived OAuth code for Short-Lived User Access Token
+    // 1. Exchange OAuth code for User Access Token
     const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
     const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
@@ -240,29 +223,40 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     const shortLivedUserToken = tokenData.access_token;
 
-    // 2. Exchange Short-Lived User Token for Long-Lived Token (60 Days)
+    // 2. Exchange for Long-Lived Token
     const longLivedUrl = `https://graph.facebook.com/v19.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${shortLivedUserToken}`;
     const longLivedRes = await fetch(longLivedUrl);
     const longLivedData = await longLivedRes.json();
-    const longLivedUserToken = longLivedData.access_token || shortLivedUserToken;
+    const userToken = longLivedData.access_token || shortLivedUserToken;
 
-    // 3. Fetch Connected Facebook Pages & Long-Lived Page Tokens
-    const pagesUrl = `https://graph.facebook.com/v19.0/me/accounts?access_token=${longLivedUserToken}`;
+    let accountsLinked = 0;
+
+    // A. Check Facebook Pages Endpoint
+    const pagesUrl = `https://graph.facebook.com/v19.0/me/accounts?access_token=${userToken}`;
     const pagesRes = await fetch(pagesUrl);
     const pagesData = await pagesRes.json();
 
     if (pagesData.data && pagesData.data.length > 0) {
       for (const page of pagesData.data) {
-        // Save Permanent Page Access Token and Page Mapping to Upstash Redis
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
-        console.log(`✅ Successfully Linked Facebook/Instagram Page "${page.name}" (#${page.id}) to User ${userId}`);
+        console.log(`✅ Linked Page "${page.name}" (#${page.id}) to User ${userId}`);
+        accountsLinked++;
       }
-    } else {
-      console.warn(`⚠️ No pages found for User ${userId}`);
     }
 
-    // Redirect back to dashboard maintaining user JWT session
+    // B. Direct Fallback: Fetch User's Direct Instagram Account info if Pages list was empty
+    if (accountsLinked === 0) {
+      const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name,username&access_token=${userToken}`);
+      const meData = await meRes.json();
+      if (meData.id) {
+        const accountName = meData.username || meData.name || 'Instagram Account';
+        await redis.hset('page_tokens', { [meData.id]: userToken });
+        await redis.hset(`user_pages:${userId}`, { [meData.id]: accountName });
+        console.log(`✅ Linked Direct Instagram Account "${accountName}" (#${meData.id}) to User ${userId}`);
+      }
+    }
+
     res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
   } catch (err) {
     console.error('❌ OAuth Callback Failed:', err.message);
@@ -270,9 +264,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
 // 5. WEBHOOK LISTENER & QUEUE WORKER
-// -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
     return res.status(200).send(req.query['hub.challenge']);
@@ -292,21 +284,17 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Background queue processor
 async function startBackgroundWorker() {
-  console.log('👷 CloudFlow Multi-Account Engine Active...');
+  console.log('👷 CloudFlow Engine Active...');
   while (true) {
     try {
       const rawEvent = await redis.rpop('meta_webhook_queue');
       if (rawEvent) {
         const payload = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
-
         for (const entry of payload.entry || []) {
           for (const change of entry.changes || []) {
             if (change.field === 'comments') {
-              const mediaId = change.value.media?.id;
-              const commentText = change.value.text;
-              console.log(`💬 Comment Received on Media #${mediaId}: "${commentText}"`);
+              console.log(`💬 Comment Event Received on Media #${change.value.media?.id}`);
             }
           }
         }
@@ -320,6 +308,6 @@ async function startBackgroundWorker() {
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow Engine Active on Port ${PORT}`);
+  console.log(`🚀 CloudFlow Active on Port ${PORT}`);
   startBackgroundWorker();
 });
