@@ -3,56 +3,95 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CloudFlow SaaS - Post & Multi-Account Automation</title>
+  <title>CloudFlow SaaS - Instagram Automation</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen font-sans flex flex-col justify-between">
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans flex flex-col justify-between">
 
   <div>
-    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-6 py-4 flex justify-between items-center">
+    <nav class="border-b border-slate-700 bg-slate-800/90 backdrop-blur-md px-6 py-4 flex justify-between items-center shadow-md">
       <div class="flex items-center space-x-3">
         <div class="w-9 h-9 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-white text-xl">⚡</div>
         <span class="text-xl font-bold tracking-tight text-white">CloudFlow</span>
       </div>
-      <div id="user-nav" class="hidden flex items-center space-x-4">
-        <span id="user-email" class="text-xs text-slate-400"></span>
-        <button onclick="logout()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">Logout</button>
+      <div id="user-nav" class="hidden flex items-center space-x-3">
+        <span id="user-email" class="text-xs text-slate-300 font-medium"></span>
+        <button onclick="open2faModal()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-indigo-300 font-medium">📱 2FA Settings</button>
+        <button onclick="logout()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium">Logout</button>
+        <button onclick="deleteAccount()" class="text-xs px-3 py-1.5 rounded-lg bg-red-900/60 hover:bg-red-800 border border-red-700 text-red-200 font-medium transition">
+          🗑️ Delete Account
+        </button>
       </div>
     </nav>
 
-    <div id="auth-section" class="max-w-md mx-auto mt-16 p-8 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl">
-      <h2 class="text-2xl font-bold text-center mb-6">Welcome to CloudFlow</h2>
+    <div id="auth-section" class="max-w-md mx-auto mt-14 p-8 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl">
+      <h2 class="text-2xl font-bold text-center mb-6 text-white">Welcome to CloudFlow</h2>
       <div id="auth-error" class="hidden mb-4 p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-xl"></div>
+      
       <form onsubmit="event.preventDefault(); handleAuth();" class="space-y-4">
-        <input type="email" id="auth-email" placeholder="you@company.com" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
-        <input type="password" id="auth-password" placeholder="••••••••" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
-        <button type="submit" id="auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium text-sm transition">
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 mb-1">Email Address</label>
+          <input type="email" id="auth-email" placeholder="you@company.com" required class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <div class="relative">
+          <label class="block text-xs font-semibold text-slate-300 mb-1">Password</label>
+          <input type="password" id="auth-password" placeholder="••••••••" required class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 pr-10 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+          <button type="button" onclick="togglePasswordVisibility('auth-password', 'eye-icon-1')" class="absolute right-3 top-7 text-slate-400 hover:text-white">
+            <span id="eye-icon-1">👁️</span>
+          </button>
+        </div>
+
+        <button type="submit" id="auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium text-sm text-white transition shadow-lg shadow-indigo-600/20">
           Sign In / Sign Up
         </button>
       </form>
     </div>
 
-    <div id="dashboard-section" class="hidden max-w-5xl mx-auto p-6 space-y-6 mt-4">
+    <div id="otp-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl">
+        <h4 class="font-bold text-lg text-slate-100 flex items-center gap-2">
+          📱 Two-Factor Authentication (Optional)
+        </h4>
+        <p class="text-xs text-slate-300">Add an extra layer of security to your account with SMS OTP verification.</p>
 
-      <div id="onboarding-banner" class="bg-gradient-to-r from-indigo-900/40 via-purple-900/30 to-slate-900 border border-indigo-500/30 rounded-2xl p-5 relative shadow-lg">
-        <button onclick="dismissBanner()" class="absolute top-3 right-3 text-slate-400 hover:text-white text-xs bg-slate-800/60 rounded-full w-6 h-6 flex items-center justify-center">✕</button>
+        <div id="otp-step-1" class="space-y-3">
+          <input type="tel" id="otp-phone" placeholder="+1 (555) 000-0000" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+          <button onclick="requestOtp()" class="w-full bg-indigo-600 hover:bg-indigo-500 py-2.5 rounded-xl text-xs font-semibold text-white">Send Code</button>
+        </div>
+
+        <div id="otp-step-2" class="hidden space-y-3">
+          <input type="text" id="otp-code" placeholder="Enter 6-digit code" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+          <button onclick="verifyOtp()" class="w-full bg-emerald-600 hover:bg-emerald-500 py-2.5 rounded-xl text-xs font-semibold text-white">Verify & Enable 2FA</button>
+        </div>
+
+        <div class="border-t border-slate-700 pt-3 flex justify-between">
+          <button onclick="close2faModal()" class="text-xs text-slate-400 hover:text-white">Skip for now</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="dashboard-section" class="hidden max-w-5xl mx-auto p-6 space-y-6 mt-2">
+
+      <div id="onboarding-banner" class="bg-gradient-to-r from-indigo-950/80 via-slate-800 to-slate-800 border border-indigo-500/30 rounded-2xl p-5 relative shadow-lg">
+        <button onclick="dismissBanner()" class="absolute top-3 right-3 text-slate-400 hover:text-white text-xs bg-slate-700 rounded-full w-6 h-6 flex items-center justify-center">✕</button>
         <h3 class="font-bold text-sm text-indigo-300 flex items-center gap-2">
           <span>🚀</span> Quick Setup Guide
         </h3>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3 text-xs">
-          <div class="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
+          <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700">
             <span class="font-bold text-indigo-400">Step 1:</span> Tap <strong>Connect Instagram</strong> to link your business account.
           </div>
-          <div class="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
-            <span class="font-bold text-indigo-400">Step 2:</span> Choose an account and click any post thumbnail from your live grid.
+          <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700">
+            <span class="font-bold text-indigo-400">Step 2:</span> Pick an account and click any post thumbnail from your grid.
           </div>
-          <div class="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
-            <span class="font-bold text-indigo-400">Step 3:</span> Use a preset template or custom text and save your automation!
+          <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700">
+            <span class="font-bold text-indigo-400">Step 3:</span> Select a template or custom text and save your automation!
           </div>
         </div>
       </div>
       
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <div class="flex items-center gap-2">
             <h3 class="font-bold text-white text-lg">Connected Accounts</h3>
@@ -60,48 +99,52 @@
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> 🟢 Active & Syncing
             </span>
           </div>
-          <p class="text-xs text-slate-400 mt-1">Connect your Instagram Creator/Business account to automate comment-to-DM replies.</p>
+          <p class="text-xs text-slate-300 mt-1">Connect your Instagram Creator/Business account to automate comment-to-DM replies.</p>
         </div>
         <button onclick="connectInstagram()" class="bg-gradient-to-r from-pink-500 to-purple-600 text-white text-xs font-bold px-5 py-3 rounded-xl hover:opacity-95 transition shadow-lg shadow-pink-500/10">
           📸 Connect Instagram Account
         </button>
       </div>
 
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 space-y-4">
         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div>
             <h3 class="font-bold text-lg text-white">Select Account & Choose Post</h3>
-            <p class="text-xs text-slate-400">Pick a connected account to load its posts, then click a thumbnail to automate.</p>
+            <p class="text-xs text-slate-300">Pick a connected account to load posts, then click a thumbnail to set up automation.</p>
           </div>
           
-          <select id="account-dropdown" onchange="loadPosts()" class="bg-slate-950 border border-slate-800 text-xs px-4 py-2.5 rounded-xl text-slate-200 focus:outline-none focus:border-indigo-500">
+          <select id="account-dropdown" onchange="loadPosts()" class="bg-slate-900 border border-slate-700 text-xs px-4 py-2.5 rounded-xl text-slate-200 focus:outline-none focus:border-indigo-500">
             <option value="">-- Select Connected Account --</option>
           </select>
         </div>
 
-        <div id="posts-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 max-h-96 overflow-y-auto p-2 bg-slate-950 rounded-xl border border-slate-800">
-          <p class="text-xs text-slate-500 col-span-full text-center py-8">Select a connected account from the dropdown above to view posts.</p>
+        <div id="posts-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 max-h-96 overflow-y-auto p-3 bg-slate-900 rounded-xl border border-slate-700">
+          <p class="text-xs text-slate-400 col-span-full text-center py-8">Select a connected account from the dropdown above to view posts.</p>
         </div>
       </div>
 
-      <div id="rule-creator" class="hidden bg-slate-900 border border-indigo-500/50 rounded-2xl p-6 space-y-5 shadow-2xl">
-        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-          <span class="text-xs font-bold bg-indigo-500/20 text-indigo-400 px-3 py-1 rounded-full border border-indigo-500/30">
-            Selected Media ID: #<span id="selected-media-id"></span>
-          </span>
-          <span class="text-xs text-slate-400">💡 Tip: Use templates below to build instant DMs!</span>
+      <div id="rule-creator" class="hidden bg-slate-800 border border-indigo-500/50 rounded-2xl p-6 space-y-5 shadow-2xl">
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-700 pb-3">
+          <div class="flex items-center gap-3">
+            <img id="selected-post-preview-img" src="" class="w-10 h-10 object-cover rounded-lg border border-slate-700">
+            <div>
+              <p id="selected-post-caption-preview" class="text-xs font-semibold text-white truncate max-w-xs"></p>
+              <span class="text-[10px] text-slate-400">Media ID: #<span id="selected-media-id"></span></span>
+            </div>
+          </div>
+          <span class="text-xs text-indigo-300 bg-indigo-950/60 px-3 py-1 rounded-full border border-indigo-500/30">💡 Use templates below for quick setup</span>
         </div>
 
         <div class="space-y-2">
           <label class="block text-xs font-semibold text-slate-300">🪄 Quick-Start Response Templates</label>
           <div class="flex flex-wrap gap-2">
-            <button type="button" onclick="applyTemplate('link')" class="text-xs bg-slate-800 hover:bg-indigo-600/30 hover:border-indigo-500 border border-slate-700 px-3 py-1.5 rounded-lg text-slate-300 transition">
+            <button type="button" onclick="applyTemplate('link')" class="text-xs bg-slate-700 hover:bg-indigo-600/40 hover:border-indigo-500 border border-slate-600 px-3 py-1.5 rounded-lg text-slate-200 transition">
               📄 Ebook / PDF Link
             </button>
-            <button type="button" onclick="applyTemplate('promo')" class="text-xs bg-slate-800 hover:bg-indigo-600/30 hover:border-indigo-500 border border-slate-700 px-3 py-1.5 rounded-lg text-slate-300 transition">
+            <button type="button" onclick="applyTemplate('promo')" class="text-xs bg-slate-700 hover:bg-indigo-600/40 hover:border-indigo-500 border border-slate-600 px-3 py-1.5 rounded-lg text-slate-200 transition">
               🏷️ Promo Discount Code
             </button>
-            <button type="button" onclick="applyTemplate('follow')" class="text-xs bg-slate-800 hover:bg-indigo-600/30 hover:border-indigo-500 border border-slate-700 px-3 py-1.5 rounded-lg text-slate-300 transition">
+            <button type="button" onclick="applyTemplate('follow')" class="text-xs bg-slate-700 hover:bg-indigo-600/40 hover:border-indigo-500 border border-slate-600 px-3 py-1.5 rounded-lg text-slate-200 transition">
               ⭐ Friendly Follow Suggestion
             </button>
           </div>
@@ -109,12 +152,12 @@
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label class="block text-xs text-slate-400 mb-1">Trigger Keyword (Optional, leave blank for any comment)</label>
-            <input type="text" id="rule-keyword" placeholder="e.g. LINK or CODE" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
+            <label class="block text-xs text-slate-300 mb-1">Trigger Keyword (Optional, leave blank for any comment)</label>
+            <input type="text" id="rule-keyword" placeholder="e.g. LINK or CODE" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
           </div>
           <div>
-            <label class="block text-xs text-slate-400 mb-1">Automated DM Response & Link</label>
-            <input type="text" id="rule-response" placeholder="e.g. Here is your requested link: https://..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500">
+            <label class="block text-xs text-slate-300 mb-1">Automated DM Response & Link</label>
+            <input type="text" id="rule-response" placeholder="e.g. Here is your requested link: https://..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
           </div>
         </div>
 
@@ -122,13 +165,13 @@
           <button onclick="savePostRule()" class="bg-indigo-600 hover:bg-indigo-500 px-6 py-2.5 rounded-xl text-sm font-medium text-white transition shadow-lg shadow-indigo-600/20">
             Save Post Automation
           </button>
-          <button onclick="openTestModal()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 px-5 py-2.5 rounded-xl text-sm font-medium transition flex items-center gap-2">
+          <button onclick="openTestModal()" class="bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-200 px-5 py-2.5 rounded-xl text-sm font-medium transition flex items-center gap-2">
             <span>🧪</span> Preview DM Card
           </button>
         </div>
       </div>
 
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6">
         <h3 class="font-bold text-lg text-white mb-4">Active Post Automations</h3>
         <div id="rules-list" class="space-y-3"></div>
       </div>
@@ -137,15 +180,13 @@
   </div>
 
   <div id="test-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl relative">
+    <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl relative">
       <button onclick="closeTestModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-sm">✕</button>
-      <h4 class="font-bold text-slate-100 flex items-center gap-2">
-        📱 Instagram DM Preview
-      </h4>
-      <p class="text-xs text-slate-400">Here is how your automated message will render on the commenter's phone:</p>
+      <h4 class="font-bold text-slate-100 flex items-center gap-2">📱 Instagram DM Preview</h4>
+      <p class="text-xs text-slate-300">Here is how your automated message will render on the commenter's phone:</p>
       
-      <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-        <div class="flex items-center gap-2 border-b border-slate-800/80 pb-2">
+      <div class="bg-slate-900 border border-slate-700 rounded-xl p-4 space-y-3">
+        <div class="flex items-center gap-2 border-b border-slate-800 pb-2">
           <div class="w-6 h-6 rounded-full bg-gradient-to-tr from-yellow-500 via-pink-500 to-purple-600 flex items-center justify-center text-[10px] font-bold text-white">IG</div>
           <span id="preview-account-name" class="text-xs font-semibold text-slate-200">Your Account</span>
         </div>
@@ -154,21 +195,20 @@
         </div>
       </div>
 
-      <button onclick="closeTestModal()" class="w-full bg-slate-800 hover:bg-slate-700 py-2.5 rounded-xl text-xs font-medium text-slate-300">
-        Looks Great, Close
-      </button>
+      <button onclick="closeTestModal()" class="w-full bg-slate-700 hover:bg-slate-600 py-2.5 rounded-xl text-xs font-medium text-slate-200">Close Preview</button>
     </div>
   </div>
 
-  <footer class="border-t border-slate-800 bg-slate-950 py-6 text-center text-xs text-slate-500">
-    <a href="/privacy.html" class="underline mr-4">Privacy Policy</a>
-    <a href="/terms.html" class="underline">Terms of Service</a>
+  <footer class="border-t border-slate-800 bg-slate-900 py-6 text-center text-xs text-slate-400">
+    <a href="/privacy.html" class="underline mr-4 hover:text-slate-200">Privacy Policy</a>
+    <a href="/terms.html" class="underline hover:text-slate-200">Terms of Service</a>
   </footer>
 
   <script>
     let selectedMediaId = null;
+    let selectedCaption = '';
+    let selectedThumbnail = '';
 
-    // Capture Session Token from OAuth Callback URL if present
     const urlParams = new URLSearchParams(window.location.search);
     const tokenFromUrl = urlParams.get('token');
     if (tokenFromUrl) {
@@ -176,8 +216,84 @@
       window.history.replaceState({}, document.title, "/");
     }
 
+    function togglePasswordVisibility(inputId, iconId) {
+      const input = document.getElementById(inputId);
+      const icon = document.getElementById(iconId);
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.innerText = '🙈';
+      } else {
+        input.type = 'password';
+        icon.innerText = '👁️';
+      }
+    }
+
     function dismissBanner() {
       document.getElementById('onboarding-banner').classList.add('hidden');
+    }
+
+    function open2faModal() {
+      document.getElementById('otp-modal').classList.remove('hidden');
+    }
+
+    function close2faModal() {
+      document.getElementById('otp-modal').classList.add('hidden');
+    }
+
+    async function requestOtp() {
+      const phone = document.getElementById('otp-phone').value.trim();
+      const token = localStorage.getItem('cloudflow_token');
+      if (!phone) return alert('Please enter a phone number.');
+
+      const res = await fetch('/api/otp/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ phone })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Verification code sent! (Demo Code: ${data.demoCode})`);
+        document.getElementById('otp-step-1').classList.add('hidden');
+        document.getElementById('otp-step-2').classList.remove('hidden');
+      } else {
+        alert(data.error || 'Failed to send OTP.');
+      }
+    }
+
+    async function verifyOtp() {
+      const code = document.getElementById('otp-code').value.trim();
+      const token = localStorage.getItem('cloudflow_token');
+
+      const res = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ code })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert('Phone 2FA enabled successfully!');
+        close2faModal();
+      } else {
+        alert(data.error || 'Invalid OTP code.');
+      }
+    }
+
+    async function deleteAccount() {
+      if (!confirm('Are you sure you want to PERMANENTLY delete your account and all associated automation rules? This action cannot be undone.')) return;
+
+      const token = localStorage.getItem('cloudflow_token');
+      const res = await fetch('/api/user/account', {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        alert('Your account and all associated data have been deleted.');
+        logout();
+      } else {
+        alert('Failed to delete account: ' + data.error);
+      }
     }
 
     function applyTemplate(type) {
@@ -192,7 +308,7 @@
         responseInput.value = 'Thanks for reaching out! Use coupon code SAVE20 at checkout for 20% off your order: https://yourdomain.com/shop 🏷️';
       } else if (type === 'follow') {
         keywordInput.value = 'INFO';
-        responseInput.value = 'Here is your link: https://yourdomain.com/resource! If you like content like this, feel free to give us a follow! ⭐';
+        responseInput.value = 'Here is your link: https://yourdomain.com/resource! Feel free to give us a follow for more updates! ⭐';
       }
     }
 
@@ -248,7 +364,7 @@
           localStorage.setItem('cloudflow_email', email);
           initDashboard();
         } else {
-          errorBox.innerText = data.error || 'Authentication failed. Please try again.';
+          errorBox.innerText = data.error || 'Authentication failed.';
           errorBox.classList.remove('hidden');
         }
       } catch (err) {
@@ -295,13 +411,15 @@
       }
     }
 
+    let globalPostsMap = {};
+
     async function loadPosts() {
       const token = localStorage.getItem('cloudflow_token');
       const pageId = document.getElementById('account-dropdown').value;
       const grid = document.getElementById('posts-grid');
 
       if (!pageId) {
-        grid.innerHTML = '<p class="text-xs text-slate-500 col-span-full text-center py-8">Select an account above to load its media grid.</p>';
+        grid.innerHTML = '<p class="text-xs text-slate-400 col-span-full text-center py-8">Select an account above to load its media grid.</p>';
         return;
       }
 
@@ -312,18 +430,20 @@
       });
       const data = await res.json();
       grid.innerHTML = '';
+      globalPostsMap = {};
 
       if (!data.posts || data.posts.length === 0) {
-        grid.innerHTML = '<p class="text-xs text-slate-500 col-span-full text-center py-8">No recent posts found for this account.</p>';
+        grid.innerHTML = '<p class="text-xs text-slate-400 col-span-full text-center py-8">No recent posts found for this account.</p>';
         return;
       }
 
       data.posts.forEach(post => {
+        globalPostsMap[post.id] = post;
         const imgUrl = post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url;
         grid.innerHTML += `
-          <div onclick="selectPost('${post.id}')" class="cursor-pointer bg-slate-900 border border-slate-800 hover:border-indigo-500 rounded-xl p-2 space-y-2 transition relative group">
+          <div onclick="selectPost('${post.id}')" class="cursor-pointer bg-slate-800 border border-slate-700 hover:border-indigo-500 rounded-xl p-2 space-y-2 transition relative group">
             <img src="${imgUrl || 'https://via.placeholder.com/150'}" class="w-full h-32 object-cover rounded-lg">
-            <p class="text-[10px] text-slate-400 truncate">${post.caption || 'No caption'}</p>
+            <p class="text-[10px] text-slate-300 truncate">${post.caption || 'No caption'}</p>
           </div>
         `;
       });
@@ -331,7 +451,13 @@
 
     function selectPost(mediaId) {
       selectedMediaId = mediaId;
+      const post = globalPostsMap[mediaId] || {};
+      selectedCaption = post.caption || 'Instagram Post';
+      selectedThumbnail = (post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url) || '';
+
       document.getElementById('selected-media-id').innerText = mediaId;
+      document.getElementById('selected-post-caption-preview').innerText = selectedCaption;
+      document.getElementById('selected-post-preview-img').src = selectedThumbnail || 'https://via.placeholder.com/150';
       document.getElementById('rule-creator').classList.remove('hidden');
     }
 
@@ -343,7 +469,13 @@
       await fetch('/api/rules/post', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ mediaId: selectedMediaId, keyword, responseText })
+        body: JSON.stringify({
+          mediaId: selectedMediaId,
+          keyword,
+          responseText,
+          caption: selectedCaption,
+          thumbnail: selectedThumbnail
+        })
       });
 
       document.getElementById('rule-keyword').value = '';
@@ -363,20 +495,32 @@
 
       const keys = Object.keys(data.postRules || {});
       if (keys.length === 0) {
-        container.innerHTML = '<p class="text-xs text-slate-500">No active post rules created.</p>';
+        container.innerHTML = '<p class="text-xs text-slate-400">No active post rules created.</p>';
         return;
       }
 
       keys.forEach(mediaId => {
         const rule = data.postRules[mediaId];
+        const captionDisplay = rule.caption ? (rule.caption.length > 40 ? rule.caption.substring(0, 40) + '...' : rule.caption) : 'Instagram Post';
+        const thumbDisplay = rule.thumbnail || 'https://via.placeholder.com/150';
+
         container.innerHTML += `
-          <div class="flex justify-between items-center p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs">
+          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3.5 bg-slate-900 border border-slate-700 rounded-xl text-xs gap-3">
             <div class="flex items-center gap-3">
-              <span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold px-2 py-0.5 rounded-full">🟢 Active</span>
-              <span class="font-bold text-indigo-400">Post #${mediaId}</span>
-              <span class="text-slate-300">➔ ${rule.responseText}</span>
+              <img src="${thumbDisplay}" class="w-12 h-12 object-cover rounded-lg border border-slate-700 flex-shrink-0">
+              <div class="space-y-1">
+                <div class="flex items-center gap-2">
+                  <span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold px-2 py-0.5 rounded-full">🟢 Active</span>
+                  <span class="font-bold text-white">${captionDisplay}</span>
+                  <span class="text-[10px] text-slate-400">(#${mediaId})</span>
+                </div>
+                <div class="text-slate-300 flex items-center gap-2">
+                  <span class="bg-indigo-950 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded font-mono text-[10px]">Keyword: ${rule.keyword || 'ANY'}</span>
+                  <span>➔ "${rule.responseText}"</span>
+                </div>
+              </div>
             </div>
-            <button onclick="deleteRule('${mediaId}')" class="text-red-400 hover:text-red-300 transition">Delete</button>
+            <button onclick="deleteRule('${mediaId}')" class="text-red-400 hover:text-red-300 font-medium transition self-end sm:self-center">Delete Rule</button>
           </div>
         `;
       });

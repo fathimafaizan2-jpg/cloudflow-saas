@@ -47,7 +47,7 @@ app.get('/privacy.html', (req, res) => res.sendFile(path.join(__dirname, 'public
 app.get('/terms.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 
 // -------------------------------------------------------------
-// 2. AUTH & USER ACCOUNTS
+// 2. AUTH, USER ACCOUNTS & ACCOUNT DELETION
 // -------------------------------------------------------------
 app.post('/api/signup', async (req, res) => {
   try {
@@ -60,12 +60,12 @@ app.post('/api/signup', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = 'usr_' + Date.now();
-    const userData = { userId, email: lowerEmail, password: hashedPassword, tier: 'Starter', maxAccounts: 1 };
+    const userData = { userId, email: lowerEmail, password: hashedPassword, tier: 'Starter', maxAccounts: 1, phone: null, twoFactorEnabled: false };
 
     await redis.hset('cloudflow_users', { [lowerEmail]: JSON.stringify(userData) });
     const token = jwt.sign({ userId, email: lowerEmail }, JWT_SECRET, { expiresIn: '7d' });
 
-    res.json({ success: true, token, user: { userId, email: lowerEmail, tier: 'Starter', maxAccounts: 1 } });
+    res.json({ success: true, token, user: { userId, email: lowerEmail, tier: 'Starter' } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -83,7 +83,64 @@ app.post('/api/login', async (req, res) => {
     if (!isValid) return res.status(400).json({ error: 'Invalid email or password.' });
 
     const token = jwt.sign({ userId: user.userId, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ success: true, token, user: { userId: user.userId, email: user.email, tier: user.tier || 'Starter' } });
+    res.json({ success: true, token, user: { userId: user.userId, email: user.email, tier: user.tier || 'Starter', twoFactorEnabled: !!user.twoFactorEnabled } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// OPTIONAL 2FA / OTP ENDPOINTS
+app.post('/api/otp/request', authenticateToken, async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone number required' });
+
+    const mockOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    await redis.hset(`otp_codes:${req.user.userId}`, { code: mockOtp, phone, createdAt: Date.now() });
+
+    console.log(`📱 [OPTIONAL OTP] Mock Verification Code for User ${req.user.userId} (${phone}): ${mockOtp}`);
+    res.json({ success: true, message: 'OTP sent successfully! (Demo code logged to server output)', demoCode: mockOtp });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/otp/verify', authenticateToken, async (req, res) => {
+  try {
+    const { code } = req.body;
+    const otpData = await redis.hgetall(`otp_codes:${req.user.userId}`);
+    if (!otpData || otpData.code !== code) {
+      return res.status(400).json({ error: 'Invalid or expired OTP code.' });
+    }
+
+    const lowerEmail = req.user.email.toLowerCase();
+    const rawUser = await redis.hget('cloudflow_users', lowerEmail);
+    if (rawUser) {
+      const user = typeof rawUser === 'string' ? JSON.parse(rawUser) : rawUser;
+      user.phone = otpData.phone;
+      user.twoFactorEnabled = true;
+      await redis.hset('cloudflow_users', { [lowerEmail]: JSON.stringify(user) });
+    }
+
+    await redis.del(`otp_codes:${req.user.userId}`);
+    res.json({ success: true, message: 'Phone 2FA verified and enabled successfully!' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PERMANENT ACCOUNT DELETION
+app.delete('/api/user/account', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const lowerEmail = req.user.email.toLowerCase();
+
+    await redis.hdel('cloudflow_users', lowerEmail);
+    await redis.del(`user_pages:${userId}`);
+    await redis.del(`post_rules:${userId}`);
+
+    console.log(`🗑️ Permanently deleted all data for user ${userId} (${lowerEmail})`);
+    res.json({ success: true, message: 'Account and associated data deleted permanently.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -116,10 +173,8 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
     const pageToken = await redis.hget('page_tokens', pageId);
     if (!pageToken) return res.status(400).json({ error: 'Page access token not found.' });
 
-    // Fetch Media
     let mediaUrl = `https://graph.facebook.com/v19.0/${pageId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&access_token=${pageToken}`;
     
-    // Resolves Facebook Page vs. Direct IG Account
     const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
     const igData = await igRes.json();
     if (igData.instagram_business_account?.id) {
@@ -140,7 +195,7 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
 
 app.post('/api/rules/post', authenticateToken, async (req, res) => {
   try {
-    const { mediaId, responseText, keyword } = req.body;
+    const { mediaId, responseText, keyword, caption, thumbnail } = req.body;
     if (!mediaId || !responseText) return res.status(400).json({ error: 'Media ID and response text required.' });
 
     const userId = req.user.userId;
@@ -148,6 +203,8 @@ app.post('/api/rules/post', authenticateToken, async (req, res) => {
       mediaId,
       keyword: keyword ? keyword.trim().toUpperCase() : 'ANY',
       responseText: responseText.trim(),
+      caption: caption || 'Instagram Post',
+      thumbnail: thumbnail || '',
       updatedAt: Date.now()
     };
 
@@ -198,7 +255,8 @@ app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
     const state = Buffer.from(JSON.stringify({ userId, token: clientJwtToken })).toString('base64');
     
-    const scope = 'instagram_basic,instagram_manage_messages,instagram_manage_comments,pages_manage_metadata,pages_show_list,business_management';
+    // Cleaned scope strictly matching active permissions:
+    const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata,pages_show_list';
 
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
     res.redirect(authUrl);
@@ -220,7 +278,6 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
     const appSecret = process.env.META_APP_SECRET || '';
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
 
-    // 1. Exchange OAuth code for User Access Token
     const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
     const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
@@ -232,7 +289,6 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     const shortLivedUserToken = tokenData.access_token;
 
-    // 2. Exchange for Long-Lived Token
     const longLivedUrl = `https://graph.facebook.com/v19.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${shortLivedUserToken}`;
     const longLivedRes = await fetch(longLivedUrl);
     const longLivedData = await longLivedRes.json();
@@ -240,7 +296,6 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     let accountsLinked = 0;
 
-    // A. Check Facebook Pages Endpoint
     const pagesUrl = `https://graph.facebook.com/v19.0/me/accounts?access_token=${userToken}`;
     const pagesRes = await fetch(pagesUrl);
     const pagesData = await pagesRes.json();
@@ -249,12 +304,19 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
       for (const page of pagesData.data) {
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
-        console.log(`✅ Linked Page "${page.name}" (#${page.id}) to User ${userId}`);
+
+        try {
+          await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=feed,comments,messages&access_token=${page.access_token}`, {
+            method: 'POST'
+          });
+        } catch (subErr) {
+          console.warn(`⚠️ Subscribed apps call warning:`, subErr.message);
+        }
+
         accountsLinked++;
       }
     }
 
-    // B. Direct Fallback: Fetch Direct Instagram Account if Pages list was empty
     if (accountsLinked === 0) {
       const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name,username&access_token=${userToken}`);
       const meData = await meRes.json();
@@ -262,7 +324,14 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         const accountName = meData.username || meData.name || 'Instagram Account';
         await redis.hset('page_tokens', { [meData.id]: userToken });
         await redis.hset(`user_pages:${userId}`, { [meData.id]: accountName });
-        console.log(`✅ Linked Direct Instagram Account "${accountName}" (#${meData.id}) to User ${userId}`);
+
+        try {
+          await fetch(`https://graph.facebook.com/v19.0/${meData.id}/subscribed_apps?subscribed_fields=feed,comments,messages&access_token=${userToken}`, {
+            method: 'POST'
+          });
+        } catch (subErr) {
+          console.warn(`⚠️ Subscribed apps call warning:`, subErr.message);
+        }
       }
     }
 
@@ -295,7 +364,6 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Background Worker: Listens for incoming comments and fires automated DMs
 async function startBackgroundWorker() {
   console.log('👷 CloudFlow Engine Active...');
   while (true) {
@@ -312,10 +380,9 @@ async function startBackgroundWorker() {
               const commenterId = change.value.from?.id;
               const recipientId = entry.id;
 
-              console.log(`💬 Comment Received on Media #${mediaId}: "${commentText}" from User #${commenterId}`);
+              console.log(`💬 Comment Received on Media #${mediaId}: "${commentText}"`);
 
               if (mediaId && commenterId) {
-                // Search all user rules in Redis for this mediaId
                 const allKeys = await redis.keys('post_rules:*');
                 for (const key of allKeys) {
                   const rawRule = await redis.hget(key, mediaId);
@@ -323,12 +390,10 @@ async function startBackgroundWorker() {
                     const rule = typeof rawRule === 'string' ? JSON.parse(rawRule) : rawRule;
                     const triggerKeyword = rule.keyword ? rule.keyword.toUpperCase() : 'ANY';
                     
-                    // Match keyword trigger
                     if (triggerKeyword === 'ANY' || commentText.toUpperCase().includes(triggerKeyword)) {
                       const pageToken = await redis.hget('page_tokens', recipientId);
 
                       if (pageToken) {
-                        // Send Direct Message via Meta Graph API
                         const sendDmRes = await fetch(`https://graph.facebook.com/v19.0/${recipientId}/messages`, {
                           method: 'POST',
                           headers: {
@@ -343,12 +408,10 @@ async function startBackgroundWorker() {
 
                         const sendDmData = await sendDmRes.json();
                         if (sendDmData.message_id) {
-                          console.log(`✅ DM Sent Successfully to User #${commenterId}!`);
+                          console.log(`✅ DM Sent Successfully!`);
                         } else {
                           console.error(`❌ Meta DM Error:`, sendDmData.error?.message || sendDmData);
                         }
-                      } else {
-                        console.warn(`⚠️ Token not found for recipient #${recipientId}`);
                       }
                     }
                   }
@@ -361,13 +424,13 @@ async function startBackgroundWorker() {
         await new Promise((res) => setTimeout(res, 2000));
       }
     } catch (error) {
-      console.error('Worker Processing Error:', error.message);
+      console.error('Worker Error:', error.message);
       await new Promise((res) => setTimeout(res, 3000));
     }
   }
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow Engine Active on Port ${PORT}`);
+  console.log(`🚀 CloudFlow Active on Port ${PORT}`);
   startBackgroundWorker();
 });
