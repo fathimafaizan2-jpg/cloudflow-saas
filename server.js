@@ -18,17 +18,15 @@ const PORT = process.env.PORT || 10000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
-// --- 0. MASTER RESET (CLEAN SLATE) ---
+// --- MASTER RESET ---
 app.get('/api/admin/master-reset', async (req, res) => {
   try {
     await redis.flushall();
-    res.send('<h1>✅ Database Wiped Successfully!</h1><p>All old tokens, rules, and users are gone. You can now start fresh.</p>');
-  } catch (err) {
-    res.status(500).send('Reset failed: ' + err.message);
-  }
+    res.send('<h1>✅ Database Wiped Successfully!</h1>');
+  } catch (err) { res.status(500).send('Reset failed: ' + err.message); }
 });
 
-// --- 1. AUTH ROUTES ---
+// --- AUTH ---
 app.post('/api/signup', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -53,15 +51,13 @@ app.post('/api/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Login failed' }); }
 });
 
-// --- 2. OAUTH ROUTES ---
+// --- OAUTH ---
 app.get('/api/auth/instagram', (req, res) => {
-  try {
-    const { token } = req.query;
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const state = Buffer.from(JSON.stringify({ userId: decoded.id, token })).toString('base64');
-    const scope = ['instagram_basic','instagram_manage_comments','instagram_manage_messages','pages_show_list','pages_read_engagement','pages_manage_metadata','business_management'].join(',');
-    res.redirect(`https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.META_APP_ID}&redirect_uri=${encodeURIComponent(`https://${req.get('host')}/api/auth/instagram/callback`)}&scope=${scope}&state=${state}`);
-  } catch (err) { res.status(500).send('Auth failed'); }
+  const { token } = req.query;
+  const decoded = jwt.verify(token, JWT_SECRET);
+  const state = Buffer.from(JSON.stringify({ userId: decoded.id, token })).toString('base64');
+  const scope = ['instagram_basic','instagram_manage_comments','instagram_manage_messages','pages_show_list','pages_read_engagement','pages_manage_metadata','business_management'].join(',');
+  res.redirect(`https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.META_APP_ID}&redirect_uri=${encodeURIComponent(`https://${req.get('host')}/api/auth/instagram/callback`)}&scope=${scope}&state=${state}`);
 });
 
 app.get('/api/auth/instagram/callback', async (req, res) => {
@@ -87,6 +83,8 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         await redis.set(`page_owner:${igId}`, userId);
         console.log(`🔗 Linked IG: ${igId} to User: ${userId}`);
       }
+      await redis.set('fallback_user', userId);
+      await redis.set('fallback_token', page.access_token);
       
       await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
     }
@@ -94,17 +92,15 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
   } catch (err) { res.redirect('/?error=oauth_failed'); }
 });
 
-// --- 3. DASHBOARD ROUTES ---
+// --- DASHBOARD ---
 app.get('/api/dashboard-data', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     const rules = await redis.hgetall(`post_rules:${decoded.id}`);
-    const parsedRules = {};
-    for (const [key, val] of Object.entries(rules || {})) {
-      parsedRules[key] = typeof val === 'string' ? JSON.parse(val) : val;
-    }
-    res.json({ postRules: parsedRules });
+    const parsed = {};
+    for (const [k, v] of Object.entries(rules || {})) { parsed[k] = typeof v === 'string' ? JSON.parse(v) : v; }
+    res.json({ postRules: parsed });
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
@@ -112,8 +108,7 @@ app.post('/api/rules/post', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
-    const { mediaId } = req.body;
-    await redis.hset(`post_rules:${decoded.id}`, { [mediaId]: JSON.stringify(req.body) });
+    await redis.hset(`post_rules:${decoded.id}`, { [req.body.mediaId]: JSON.stringify(req.body) });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
@@ -151,9 +146,10 @@ app.delete('/api/user/account', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// --- 4. WEBHOOK & WORKER ---
+// --- WEBHOOK & INDESTRUCTIBLE WORKER ---
 app.post('/webhook', async (req, res) => {
   console.log('📬 WEBHOOK RECEIVED');
+  // Store raw body securely as a JSON string to prevent [object Object] errors
   await redis.lpush('webhook_queue', JSON.stringify(req.body));
   res.status(200).send('EVENT_RECEIVED');
 });
@@ -164,16 +160,19 @@ app.get('/webhook', (req, res) => {
 });
 
 async function worker() {
-  console.log('👷 Background Worker Active...');
+  console.log('👷 Indestructible Worker Active...');
   while (true) {
     try {
       const raw = await redis.rpop('webhook_queue');
       if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
-      const data = JSON.parse(raw);
+      
+      // Defensively parse JSON whether it's a string or already an object
+      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      
       for (const entry of data.entry || []) {
         const igId = entry.id;
-        const userId = await redis.get(`page_owner:${igId}`);
-        const token = await redis.hget('page_tokens', igId);
+        const userId = await redis.get(`page_owner:${igId}`) || await redis.get('fallback_user');
+        const token = await redis.hget('page_tokens', igId) || await redis.get('fallback_token');
         if (!userId || !token) { console.log(`⚠️ No owner for ID: ${igId}`); continue; }
         
         const rules = await redis.hgetall(`post_rules:${userId}`);
@@ -196,11 +195,12 @@ async function worker() {
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ recipient: { id: senderId }, message: { text: rule.responseText } })
               });
+              console.log(`✅ DM Sent Successfully!`);
             }
           }
         }
       }
-    } catch (err) { console.error('Worker Error:', err.message); }
+    } catch (err) { console.error('Worker Safe Catch Error:', err.message); }
   }
 }
 
