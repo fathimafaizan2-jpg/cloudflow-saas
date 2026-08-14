@@ -15,7 +15,7 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
@@ -34,7 +34,7 @@ function authenticateToken(req, res, next) {
 }
 
 // -------------------------------------------------------------
-// 0. AUTHENTICATION (Login & Signup) - Matched to Frontend
+// 0. AUTHENTICATION (Login & Signup)
 // -------------------------------------------------------------
 app.post('/api/signup', async (req, res) => {
   try {
@@ -71,7 +71,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 1. OAUTH & ACCOUNT CONNECTION
+// 1. OAUTH & ACCOUNT CONNECTION (Fixed ID Mapping)
 // -------------------------------------------------------------
 app.get('/api/auth/instagram', (req, res) => {
   try {
@@ -107,9 +107,21 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     if (pagesData.data) {
       for (const page of pagesData.data) {
+        // 1. Fetch Instagram Business Account ID attached to this Page
+        const igRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account&access_token=${page.access_token}`);
+        const igData = await igRes.json();
+        const igBusinessId = igData.instagram_business_account?.id;
+
+        // Save tokens & mappings for BOTH Page ID and IG Business ID
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
         await redis.set(`page_owner:${page.id}`, userId);
+
+        if (igBusinessId) {
+          await redis.hset('page_tokens', { [igBusinessId]: page.access_token });
+          await redis.set(`page_owner:${igBusinessId}`, userId);
+          console.log(`🔗 Mapped IG Business ID ${igBusinessId} to User ${userId}`);
+        }
         
         // Force Takeover
         await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
@@ -117,6 +129,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
     }
     res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
   } catch (err) {
+    console.error('OAuth Callback Error:', err);
     res.redirect('/?error=oauth_failed');
   }
 });
@@ -136,7 +149,6 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
     const { pageId } = req.query;
     const pageToken = await redis.hget('page_tokens', pageId);
     
-    // Get Instagram Business Account ID
     const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
     const igData = await igRes.json();
     const igId = igData.instagram_business_account?.id;
@@ -179,7 +191,6 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     const email = req.user.email;
     
-    // Clean up all user data
     const accounts = await redis.hgetall(`user_pages:${userId}`);
     for (const pageId of Object.keys(accounts || {})) {
       await redis.hdel('page_tokens', pageId);
@@ -196,17 +207,19 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 3. WEBHOOKS
+// 3. WEBHOOKS (Enhanced Logging)
 // -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
+    console.log('✅ Webhook Verified Successfully via GET');
     return res.status(200).send(req.query['hub.challenge']);
   }
+  console.error('❌ Webhook Verification Failed: Token Mismatch');
   res.sendStatus(403);
 });
 
 app.post('/webhook', async (req, res) => {
-  console.log('📬 RAW WEBHOOK HIT! Object:', req.body.object);
+  console.log('📬 RAW WEBHOOK HIT! Full Payload:', JSON.stringify(req.body));
   if (req.body.object === 'instagram' || req.body.object === 'page') {
     await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
     return res.status(200).send('EVENT_RECEIVED');
@@ -215,7 +228,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 4. BACKGROUND WORKER
+// 4. BACKGROUND WORKER (Robust Processing)
 // -------------------------------------------------------------
 async function startBackgroundWorker() {
   console.log('👷 Engine Active...');
@@ -224,19 +237,26 @@ async function startBackgroundWorker() {
       const rawEvent = await redis.rpop('meta_webhook_queue');
       if (!rawEvent) { await new Promise(r => setTimeout(r, 2000)); continue; }
 
-      // Robust JSON parsing: handle cases where data is already an object
       const payload = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
       
       for (const entry of payload.entry || []) {
         const igAccountId = entry.id;
+        console.log(`🔍 Processing entry ID: ${igAccountId}`);
+
         if (entry.messaging) {
           for (const msg of entry.messaging) {
-            if (msg.message?.text) await processAutomation(igAccountId, msg.sender.id, msg.message.text, 'DM');
+            if (msg.message?.text) {
+              console.log(`📩 DM Received from ${msg.sender.id}: "${msg.message.text}"`);
+              await processAutomation(igAccountId, msg.sender.id, msg.message.text, 'DM');
+            }
           }
         }
         if (entry.changes) {
           for (const change of entry.changes) {
-            if (change.field === 'comments') await processAutomation(igAccountId, change.value.from.id, change.value.text, 'COMMENT', change.value.media.id);
+            if (change.field === 'comments') {
+              console.log(`💬 Comment Received: "${change.value.text}"`);
+              await processAutomation(igAccountId, change.value.from.id, change.value.text, 'COMMENT', change.value.media.id);
+            }
           }
         }
       }
@@ -246,11 +266,18 @@ async function startBackgroundWorker() {
 
 async function processAutomation(igAccountId, targetId, text, type, mediaId = null) {
   const userId = await redis.get(`page_owner:${igAccountId}`);
-  if (!userId) return;
+  if (!userId) {
+    console.error(`❌ No user owner found for account ID: ${igAccountId}`);
+    return;
+  }
 
   const rules = await redis.hgetall(`post_rules:${userId}`);
   const pageToken = await redis.hget('page_tokens', igAccountId);
-  if (!rules || !pageToken) return;
+  
+  if (!rules || !pageToken) {
+    console.error(`❌ Missing rules or token for user ${userId} (Account: ${igAccountId})`);
+    return;
+  }
 
   const input = text.toUpperCase().trim();
   for (const [id, data] of Object.entries(rules)) {
@@ -259,12 +286,13 @@ async function processAutomation(igAccountId, targetId, text, type, mediaId = nu
 
     const trigger = rule.keyword?.toUpperCase().trim() || 'ANY';
     if (trigger === 'ANY' || input === trigger || input.includes(trigger)) {
+      console.log(`🎯 Match found! Sending reply to ${targetId}`);
       await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${pageToken}` },
         body: JSON.stringify({ recipient: { id: targetId }, message: { text: rule.responseText } })
       });
-      console.log(`✅ ${type} Sent!`);
+      console.log(`✅ ${type} Sent successfully!`);
       return;
     }
   }
