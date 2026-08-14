@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Service Clients
+// --- SERVICE CLIENTS ---
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_mock_key');
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -23,400 +23,211 @@ const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
-// -------------------------------------------------------------
-// AUTHENTICATION MIDDLEWARE
-// -------------------------------------------------------------
+// --- MIDDLEWARE ---
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1];
-
   if (!token && req.query.token) token = req.query.token;
-  if (!token) return res.status(401).json({ error: 'Access denied. Please log in.' });
+  if (!token) return res.status(401).json({ error: 'Access denied.' });
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Session expired. Log in again.' });
+    if (err) return res.status(403).json({ error: 'Session expired.' });
     req.user = user;
     next();
   });
 }
 
 // -------------------------------------------------------------
-// 1. PUBLIC COMPLIANCE ROUTES
+// 1. OAUTH & ACCOUNT CONNECTION (With Force Takeover)
 // -------------------------------------------------------------
-app.get('/privacy.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
-app.get('/terms.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
-
-// -------------------------------------------------------------
-// 2. AUTH, USER ACCOUNTS & ACCOUNT DELETION
-// -------------------------------------------------------------
-app.post('/api/signup', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-
-    const lowerEmail = email.toLowerCase().trim();
-    const existing = await redis.hget('cloudflow_users', lowerEmail);
-    if (existing) return res.status(400).json({ error: 'Account already exists.' });
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const userId = 'usr_' + Date.now();
-    const userData = { userId, email: lowerEmail, password: hashedPassword, tier: 'Starter', maxAccounts: 1, phone: null, twoFactorEnabled: false };
-
-    await redis.hset('cloudflow_users', { [lowerEmail]: JSON.stringify(userData) });
-    const token = jwt.sign({ userId, email: lowerEmail }, JWT_SECRET, { expiresIn: '7d' });
-
-    res.json({ success: true, token, user: { userId, email: lowerEmail, tier: 'Starter' } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const lowerEmail = email.toLowerCase().trim();
-    const rawUser = await redis.hget('cloudflow_users', lowerEmail);
-    if (!rawUser) return res.status(400).json({ error: 'Invalid email or password.' });
-
-    const user = typeof rawUser === 'string' ? JSON.parse(rawUser) : rawUser;
-    const isValid = await bcrypt.compare(password, user.password);
-    if (!isValid) return res.status(400).json({ error: 'Invalid email or password.' });
-
-    const token = jwt.sign({ userId: user.userId, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ success: true, token, user: { userId: user.userId, email: user.email, tier: user.tier || 'Starter', twoFactorEnabled: !!user.twoFactorEnabled } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/otp/request', authenticateToken, async (req, res) => {
-  try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Phone number required' });
-    const mockOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    await redis.hset(`otp_codes:${req.user.userId}`, { code: mockOtp, phone, createdAt: Date.now() });
-    console.log(`📱 Mock Verification Code for User ${req.user.userId} (${phone}): ${mockOtp}`);
-    res.json({ success: true, message: 'OTP sent successfully!', demoCode: mockOtp });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/otp/verify', authenticateToken, async (req, res) => {
-  try {
-    const { code } = req.body;
-    const otpData = await redis.hgetall(`otp_codes:${req.user.userId}`);
-    if (!otpData || otpData.code !== code) {
-      return res.status(400).json({ error: 'Invalid or expired OTP code.' });
-    }
-    const lowerEmail = req.user.email.toLowerCase();
-    const rawUser = await redis.hget('cloudflow_users', lowerEmail);
-    if (rawUser) {
-      const user = typeof rawUser === 'string' ? JSON.parse(rawUser) : rawUser;
-      user.phone = otpData.phone;
-      user.twoFactorEnabled = true;
-      await redis.hset('cloudflow_users', { [lowerEmail]: JSON.stringify(user) });
-    }
-    await redis.del(`otp_codes:${req.user.userId}`);
-    res.json({ success: true, message: 'Phone 2FA verified and enabled successfully!' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/user/account', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const lowerEmail = req.user.email.toLowerCase();
-    await redis.hdel('cloudflow_users', lowerEmail);
-    await redis.del(`user_pages:${userId}`);
-    await redis.del(`post_rules:${userId}`);
-    console.log(`🗑️ Permanently deleted all data for user ${userId}`);
-    res.json({ success: true, message: 'Account deleted permanently.' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -------------------------------------------------------------
-// 3. MULTI-ACCOUNT & POST-LEVEL AUTOMATIONS
-// -------------------------------------------------------------
-app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const userPages = (await redis.hgetall(`user_pages:${userId}`)) || {};
-    const accounts = Object.entries(userPages).map(([pageId, name]) => ({
-      pageId,
-      name: typeof name === 'string' ? name : JSON.parse(name)
-    }));
-    res.json({ accounts });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
-  try {
-    const { pageId } = req.query;
-    if (!pageId) return res.status(400).json({ error: 'Page ID required' });
-    const pageToken = await redis.hget('page_tokens', pageId);
-    if (!pageToken) return res.status(400).json({ error: 'Page access token not found.' });
-    let mediaUrl = `https://graph.facebook.com/v19.0/${pageId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&access_token=${pageToken}`;
-    const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
-    const igData = await igRes.json();
-    if (igData.instagram_business_account?.id) {
-      const igUserId = igData.instagram_business_account.id;
-      mediaUrl = `https://graph.facebook.com/v19.0/${igUserId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&access_token=${pageToken}`;
-    }
-    const mediaRes = await fetch(mediaUrl);
-    const mediaData = await mediaRes.json();
-    if (mediaData.error) return res.status(400).json({ error: mediaData.error.message });
-    res.json({ posts: mediaData.data || [] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/rules/post', authenticateToken, async (req, res) => {
-  try {
-    const { mediaId, responseText, keyword, caption, thumbnail } = req.body;
-    if (!mediaId || !responseText) return res.status(400).json({ error: 'Media ID and response text required.' });
-    const userId = req.user.userId;
-    const ruleData = {
-      mediaId,
-      keyword: keyword ? keyword.trim().toUpperCase() : 'ANY',
-      responseText: responseText.trim(),
-      caption: caption || 'Instagram Post',
-      thumbnail: thumbnail || '',
-      updatedAt: Date.now()
-    };
-    await redis.hset(`post_rules:${userId}`, { [mediaId]: JSON.stringify(ruleData) });
-    res.json({ success: true, message: 'Automation active for post!' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const postRules = (await redis.hgetall(`post_rules:${userId}`)) || {};
-    const userPages = (await redis.hgetall(`user_pages:${userId}`)) || {};
-    const parsedRules = {};
-    for (const [key, val] of Object.entries(postRules)) {
-      parsedRules[key] = typeof val === 'string' ? JSON.parse(val) : val;
-    }
-    res.json({ postRules: parsedRules, connectedPagesCount: Object.keys(userPages).length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    await redis.hdel(`post_rules:${userId}`, req.params.mediaId);
-    res.json({ success: true, message: 'Automation deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -------------------------------------------------------------
-// 4. DIRECT INSTAGRAM & FACEBOOK OAUTH
-// -------------------------------------------------------------
-app.get('/api/auth/instagram', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const authHeader = req.headers['authorization'];
-    const clientJwtToken = (authHeader && authHeader.split(' ')[1]) || req.query.token;
-    const appId = process.env.META_APP_ID;
-    const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
-    const state = Buffer.from(JSON.stringify({ userId, token: clientJwtToken })).toString('base64');
-    const scope = 'instagram_basic,instagram_manage_messages,pages_manage_metadata,pages_show_list,pages_read_engagement,business_management';
-    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
-    res.redirect(authUrl);
-  } catch (err) {
-    res.status(500).send('OAuth Initialization Error');
-  }
-});
-
 app.get('/api/auth/instagram/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
-    if (!code) return res.status(400).send('Authorization code missing from Meta.');
     const decodedState = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
     const userId = decodedState.userId;
     const userJwtToken = decodedState.token;
+
     const appId = process.env.META_APP_ID;
     const appSecret = process.env.META_APP_SECRET || '';
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
+
+    // 1. Exchange code for User Access Token
     const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
     const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
-    if (tokenData.error) {
-      console.error('❌ Token Exchange Error:', tokenData.error);
-      return res.redirect(`/?error=token_exchange_failed&token=${userJwtToken}`);
-    }
-    const shortLivedUserToken = tokenData.access_token;
-    const longLivedUrl = `https://graph.facebook.com/v19.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${shortLivedUserToken}`;
-    const longLivedRes = await fetch(longLivedUrl);
-    const longLivedData = await longLivedRes.json();
-    const userToken = longLivedData.access_token || shortLivedUserToken;
-    let accountsLinked = 0;
+    const userToken = tokenData.access_token;
+
+    // 2. Get the Pages linked to this User
     const pagesUrl = `https://graph.facebook.com/v19.0/me/accounts?access_token=${userToken}`;
     const pagesRes = await fetch(pagesUrl);
     const pagesData = await pagesRes.json();
-    if (pagesData.data && pagesData.data.length > 0) {
+
+    if (pagesData.data) {
       for (const page of pagesData.data) {
+        // Save Page Token and Owner Mapping
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
-        try {
-          await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=feed,comments,messages&access_token=${page.access_token}`, {
-            method: 'POST'
-          });
-        } catch (subErr) {
-          console.warn(`⚠️ Subscribed apps call warning:`, subErr.message);
-        }
-        accountsLinked++;
-      }
-    }
-    if (accountsLinked === 0) {
-      const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name,username&access_token=${userToken}`);
-      const meData = await meRes.json();
-      if (meData.id) {
-        const accountName = meData.username || meData.name || 'Instagram Account';
-        await redis.hset('page_tokens', { [meData.id]: userToken });
-        await redis.hset(`user_pages:${userId}`, { [meData.id]: accountName });
-        try {
-          await fetch(`https://graph.facebook.com/v19.0/${meData.id}/subscribed_apps?subscribed_fields=feed,comments,messages&access_token=${userToken}`, {
-            method: 'POST'
-          });
-        } catch (subErr) {
-          console.warn(`⚠️ Subscribed apps call warning:`, subErr.message);
-        }
+        await redis.set(`page_owner:${page.id}`, userId);
+
+        // 3. FORCE TAKEOVER: Tell Meta this app is the Primary Receiver for messages and comments
+        console.log(`🔗 Subscribing App to Page: ${page.name} (${page.id})`);
+        const subUrl = `https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,comments&access_token=${page.access_token}`;
+        const subRes = await fetch(subUrl, { method: 'POST' });
+        const subResult = await subRes.json();
+        console.log(`✅ Subscription Result for ${page.name}:`, subResult);
       }
     }
     res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
   } catch (err) {
-    console.error('❌ OAuth Callback Failed:', err.message);
-    res.redirect('/?error=oauth_processing_error');
+    console.error('OAuth Error:', err.message);
+    res.redirect('/?error=oauth_failed');
   }
 });
 
 // -------------------------------------------------------------
-// 5. WEBHOOK LISTENER & AUTOMATED DM WORKER
+// 2. WEBHOOK ENDPOINTS (The "Ear" of your App)
 // -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
-    console.log('✅ Webhook Verified');
+    console.log('✅ Webhook Verified Successfully');
     return res.status(200).send(req.query['hub.challenge']);
   }
-  return res.status(403).send('Verification failed');
+  res.sendStatus(403);
 });
 
 app.post('/webhook', async (req, res) => {
-  // --- DIAGNOSTIC LOG ---
+  // DIAGNOSTIC LOG: See if Meta is even touching your server
   console.log('📬 RAW WEBHOOK HIT! Object:', req.body.object);
-  
-  try {
-    if (req.body.object === 'instagram' || req.body.object === 'page') {
+
+  if (req.body.object === 'instagram' || req.body.object === 'page') {
+    try {
       await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
       return res.status(200).send('EVENT_RECEIVED');
+    } catch (err) {
+      console.error('Queue Error:', err.message);
+      return res.sendStatus(500);
     }
-    res.sendStatus(404);
-  } catch (err) {
-    console.error('Webhook Error:', err.message);
-    res.sendStatus(500);
   }
+  res.sendStatus(404);
 });
 
+// -------------------------------------------------------------
+// 3. BACKGROUND WORKER (The "Brain" that processes events)
+// -------------------------------------------------------------
 async function startBackgroundWorker() {
-  console.log('👷 CloudFlow Engine Active...');
+  console.log('👷 CloudFlow Automation Engine Active...');
   while (true) {
     try {
       const rawEvent = await redis.rpop('meta_webhook_queue');
-      if (rawEvent) {
-        const payload = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
-        for (const entry of payload.entry || []) {
-          const igAccountId = entry.id;
+      if (!rawEvent) {
+        await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds if queue is empty
+        continue;
+      }
 
-          // 1. Handle Real Direct Messages (DMs)
-          if (entry.messaging) {
-            for (const messagingEvent of entry.messaging) {
-              const senderId = messagingEvent.sender?.id;
-              const messageText = messagingEvent.message?.text || '';
-              if (senderId && messageText) {
-                console.log(`📩 DM Received from ${senderId}: "${messageText}"`);
-                await processKeywordAutomation(igAccountId, senderId, messageText, 'DM');
-              }
+      const payload = JSON.parse(rawEvent);
+      for (const entry of payload.entry || []) {
+        const igAccountId = entry.id; // This is the ID of the Page or IG account receiving the event
+
+        // --- PRIORITY 1: DIRECT MESSAGES (DMs) ---
+        if (entry.messaging) {
+          for (const msgEvent of entry.messaging) {
+            const senderId = msgEvent.sender?.id;
+            const text = msgEvent.message?.text || '';
+            if (senderId && text) {
+              console.log(`📩 DM Received from ${senderId}: "${text}"`);
+              await runAutomationLogic(igAccountId, senderId, text, 'DM');
             }
           }
+        }
 
-          // 2. Handle Comments
-          if (entry.changes) {
-            for (const change of entry.changes) {
-              if (change.field === 'comments') {
-                const mediaId = change.value.media?.id;
-                const commentText = change.value.text || '';
-                const commenterId = change.value.from?.id;
-                if (mediaId && commenterId && commentText) {
-                  console.log(`💬 Comment Received on Media #${mediaId}: "${commentText}"`);
-                  await processKeywordAutomation(igAccountId, commenterId, commentText, 'COMMENT', mediaId);
-                }
+        // --- PRIORITY 2: COMMENTS ---
+        if (entry.changes) {
+          for (const change of entry.changes) {
+            if (change.field === 'comments') {
+              const senderId = change.value.from?.id;
+              const text = change.value.text || '';
+              const mediaId = change.value.media?.id;
+              if (senderId && text) {
+                console.log(`💬 Comment Received on Media ${mediaId}: "${text}"`);
+                await runAutomationLogic(igAccountId, senderId, text, 'COMMENT', mediaId);
               }
             }
           }
         }
-      } else {
-        await new Promise((res) => setTimeout(res, 2000));
       }
-    } catch (error) {
-      console.error('Worker Error:', error.message);
-      await new Promise((res) => setTimeout(res, 3000));
+    } catch (err) {
+      console.error('Worker Processing Error:', err.message);
     }
   }
 }
 
-async function processKeywordAutomation(igAccountId, targetUserId, incomingText, type, mediaId = null) {
+// -------------------------------------------------------------
+// 4. AUTOMATION LOGIC (Keyword Matching & Replying)
+// -------------------------------------------------------------
+async function runAutomationLogic(igAccountId, targetUserId, incomingText, type, mediaId = null) {
   try {
-    const allRuleKeys = await redis.keys('post_rules:*');
-    for (const key of allRuleKeys) {
-      const rules = await redis.hgetall(key);
-      for (const [ruleMediaId, ruleDataRaw] of Object.entries(rules)) {
-        const rule = typeof ruleDataRaw === 'string' ? JSON.parse(ruleDataRaw) : ruleDataRaw;
-        const isCorrectPost = !mediaId || rule.mediaId === mediaId;
-        const triggerKeyword = rule.keyword ? rule.keyword.toUpperCase() : 'ANY';
-        const isKeywordMatch = triggerKeyword === 'ANY' || incomingText.toUpperCase().includes(triggerKeyword);
-        if (isCorrectPost && isKeywordMatch) {
-          const pageToken = await redis.hget('page_tokens', igAccountId);
-          if (pageToken) {
-            const sendDmRes = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${pageToken}`
-              },
-              body: JSON.stringify({
-                recipient: { id: targetUserId },
-                message: { text: rule.responseText }
-              })
-            });
-            const sendDmData = await sendDmRes.json();
-            if (sendDmData.message_id) {
-              console.log(`✅ ${type} Auto-Reply Sent to ${targetUserId}`);
-            } else {
-              console.error(`❌ Meta API Error:`, sendDmData.error?.message || sendDmData);
-            }
-          }
+    // 1. Find which user owns this Page/IG Account
+    const userId = await redis.get(`page_owner:${igAccountId}`);
+    if (!userId) {
+      console.log(`⚠️ No owner found for Account ID: ${igAccountId}`);
+      return;
+    }
+
+    // 2. Fetch all automation rules for this user
+    const rules = await redis.hgetall(`post_rules:${userId}`);
+    if (!rules) return;
+
+    const pageToken = await redis.hget('page_tokens', igAccountId);
+    if (!pageToken) return;
+
+    const cleanInput = incomingText.toUpperCase().trim();
+
+    for (const [ruleId, ruleDataRaw] of Object.entries(rules)) {
+      const rule = typeof ruleDataRaw === 'string' ? JSON.parse(ruleDataRaw) : ruleDataRaw;
+      const trigger = rule.keyword ? rule.keyword.toUpperCase().trim() : 'ANY';
+
+      // --- CONDITION MATCHING ---
+      
+      // A. If it's a comment, it MUST match the specific Post (mediaId)
+      if (type === 'COMMENT' && rule.mediaId !== mediaId) continue;
+
+      // B. Keyword Match Check
+      const isMatch = (trigger === 'ANY') || 
+                      (cleanInput === trigger) || 
+                      (cleanInput.includes(trigger));
+
+      if (isMatch) {
+        console.log(`🎯 Match! Trigger: "${trigger}" -> Sending ${type} Response.`);
+        
+        // 3. Send the DM Response via Meta API
+        const response = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json', 
+            'Authorization': `Bearer ${pageToken}` 
+          },
+          body: JSON.stringify({
+            recipient: { id: targetUserId },
+            message: { text: rule.responseText }
+          })
+        });
+
+        const result = await response.json();
+        if (result.message_id) {
+          console.log(`✅ Auto-Reply Sent to ${targetUserId}`);
+        } else {
+          console.error(`❌ Meta API Error:`, result.error?.message || result);
         }
+        
+        return; // Stop after first match
       }
     }
   } catch (err) {
-    console.error('Automation Error:', err.message);
+    console.error('Automation Logic Error:', err.message);
   }
 }
 
+// --- START SERVER ---
 app.listen(PORT, () => {
   console.log(`🚀 CloudFlow Active on Port ${PORT}`);
   startBackgroundWorker();
