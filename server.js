@@ -224,7 +224,9 @@ async function startBackgroundWorker() {
       const rawEvent = await redis.rpop('meta_webhook_queue');
       if (!rawEvent) { await new Promise(r => setTimeout(r, 2000)); continue; }
 
-      const payload = JSON.parse(rawEvent);
+      // Robust JSON parsing: handle cases where data is already an object
+      const payload = typeof rawEvent === 'string' ? JSON.parse(rawEvent) : rawEvent;
+      
       for (const entry of payload.entry || []) {
         const igAccountId = entry.id;
         if (entry.messaging) {
