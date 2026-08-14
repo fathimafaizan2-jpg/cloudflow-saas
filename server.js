@@ -47,7 +47,16 @@ app.get('/api/auth/instagram', (req, res) => {
 
     // Verify user and prepare state
     const decoded = jwt.verify(token, JWT_SECRET);
-    const state = Buffer.from(JSON.stringify({ userId: decoded.id, token })).toString('base64');
+    
+    // Try to find the user ID in common JWT fields
+    const userId = decoded.id || decoded.userId || decoded._id || decoded.sub || decoded.email;
+    
+    if (!userId) {
+      console.error('❌ JWT does not contain a valid ID field:', decoded);
+      return res.status(400).send('Invalid token structure');
+    }
+
+    const state = Buffer.from(JSON.stringify({ userId, token })).toString('base64');
 
     const appId = process.env.META_APP_ID;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
