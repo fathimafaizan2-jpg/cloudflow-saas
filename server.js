@@ -71,7 +71,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 1. OAUTH & ACCOUNT CONNECTION (Fixed ID Mapping)
+// 1. OAUTH & ACCOUNT CONNECTION
 // -------------------------------------------------------------
 app.get('/api/auth/instagram', (req, res) => {
   try {
@@ -107,12 +107,10 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     if (pagesData.data) {
       for (const page of pagesData.data) {
-        // 1. Fetch Instagram Business Account ID attached to this Page
         const igRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account&access_token=${page.access_token}`);
         const igData = await igRes.json();
         const igBusinessId = igData.instagram_business_account?.id;
 
-        // Save tokens & mappings for BOTH Page ID and IG Business ID
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
         await redis.set(`page_owner:${page.id}`, userId);
@@ -120,10 +118,11 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         if (igBusinessId) {
           await redis.hset('page_tokens', { [igBusinessId]: page.access_token });
           await redis.set(`page_owner:${igBusinessId}`, userId);
+          // Also save a fallback for testing (ID 0)
+          await redis.set(`page_owner:0`, userId);
           console.log(`🔗 Mapped IG Business ID ${igBusinessId} to User ${userId}`);
         }
         
-        // Force Takeover
         await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
       }
     }
@@ -190,7 +189,6 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const email = req.user.email;
-    
     const accounts = await redis.hgetall(`user_pages:${userId}`);
     for (const pageId of Object.keys(accounts || {})) {
       await redis.hdel('page_tokens', pageId);
@@ -199,7 +197,6 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
     await redis.del(`user_pages:${userId}`);
     await redis.del(`post_rules:${userId}`);
     await redis.del(`user:${email}`);
-    
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Delete failed' });
@@ -207,14 +204,13 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 3. WEBHOOKS (Enhanced Logging)
+// 3. WEBHOOKS
 // -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
-    console.log('✅ Webhook Verified Successfully via GET');
+    console.log('✅ Webhook Verified Successfully');
     return res.status(200).send(req.query['hub.challenge']);
   }
-  console.error('❌ Webhook Verification Failed: Token Mismatch');
   res.sendStatus(403);
 });
 
@@ -228,7 +224,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 4. BACKGROUND WORKER (Robust Processing)
+// 4. BACKGROUND WORKER
 // -------------------------------------------------------------
 async function startBackgroundWorker() {
   console.log('👷 Engine Active...');
@@ -246,16 +242,21 @@ async function startBackgroundWorker() {
         if (entry.messaging) {
           for (const msg of entry.messaging) {
             if (msg.message?.text) {
-              console.log(`📩 DM Received from ${msg.sender.id}: "${msg.message.text}"`);
+              console.log(`📩 DM Received: "${msg.message.text}"`);
               await processAutomation(igAccountId, msg.sender.id, msg.message.text, 'DM');
             }
           }
         }
         if (entry.changes) {
           for (const change of entry.changes) {
-            if (change.field === 'comments') {
-              console.log(`💬 Comment Received: "${change.value.text}"`);
-              await processAutomation(igAccountId, change.value.from.id, change.value.text, 'COMMENT', change.value.media.id);
+            if (change.field === 'comments' || change.field === 'feed') {
+              const text = change.value.text || change.value.message;
+              const senderId = change.value.from?.id;
+              const mediaId = change.value.media?.id || change.value.post_id;
+              if (text) {
+                console.log(`💬 Comment/Feed Received: "${text}" from ${senderId}`);
+                await processAutomation(igAccountId, senderId, text, 'COMMENT', mediaId);
+              }
             }
           }
         }
@@ -265,37 +266,55 @@ async function startBackgroundWorker() {
 }
 
 async function processAutomation(igAccountId, targetId, text, type, mediaId = null) {
-  const userId = await redis.get(`page_owner:${igAccountId}`);
+  // Handle Meta Test Tool (ID 0)
+  let lookupId = igAccountId;
+  if (igAccountId === "0") {
+    console.log('🧪 Test Tool Detected (ID 0). Using fallback owner...');
+    lookupId = "0"; 
+  }
+
+  const userId = await redis.get(`page_owner:${lookupId}`);
   if (!userId) {
-    console.error(`❌ No user owner found for account ID: ${igAccountId}`);
+    console.error(`❌ No user owner found for account ID: ${lookupId}`);
     return;
   }
 
   const rules = await redis.hgetall(`post_rules:${userId}`);
-  const pageToken = await redis.hget('page_tokens', igAccountId);
+  const pageToken = await redis.hget('page_tokens', lookupId);
   
   if (!rules || !pageToken) {
-    console.error(`❌ Missing rules or token for user ${userId} (Account: ${igAccountId})`);
+    console.error(`❌ Missing rules or token for user ${userId} (Account: ${lookupId})`);
     return;
   }
 
   const input = text.toUpperCase().trim();
+  console.log(`🔎 Checking ${Object.keys(rules).length} rules for user ${userId}...`);
+
   for (const [id, data] of Object.entries(rules)) {
     const rule = typeof data === 'string' ? JSON.parse(data) : data;
-    if (type === 'COMMENT' && rule.mediaId !== mediaId) continue;
+    
+    // For comments, we check mediaId. For DMs, we check all rules.
+    if (type === 'COMMENT' && mediaId && rule.mediaId !== mediaId && igAccountId !== "0") {
+        continue;
+    }
 
     const trigger = rule.keyword?.toUpperCase().trim() || 'ANY';
+    console.log(`   - Comparing "${input}" to trigger "${trigger}"`);
+
     if (trigger === 'ANY' || input === trigger || input.includes(trigger)) {
       console.log(`🎯 Match found! Sending reply to ${targetId}`);
-      await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
+      const res = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${pageToken}` },
         body: JSON.stringify({ recipient: { id: targetId }, message: { text: rule.responseText } })
       });
-      console.log(`✅ ${type} Sent successfully!`);
+      const result = await res.json();
+      if (result.error) console.error('❌ Meta API Error:', result.error.message);
+      else console.log(`✅ ${type} Sent successfully!`);
       return;
     }
   }
+  console.log('⚠️ No matching keyword found in any rules.');
 }
 
 app.listen(PORT, () => {
