@@ -3,21 +3,17 @@ const express = require('express');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const Stripe = require('stripe');
 const { Redis } = require('@upstash/redis');
-const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- SERVICE CLIENTS ---
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_mock_key');
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
@@ -38,31 +34,26 @@ function authenticateToken(req, res, next) {
 }
 
 // -------------------------------------------------------------
-// 0. AUTHENTICATION (Login & Signup) - RESTORED
+// 0. AUTHENTICATION (Login & Signup) - Matched to Frontend
 // -------------------------------------------------------------
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/signup', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-
     const existingUser = await redis.get(`user:${email}`);
     if (existingUser) return res.status(400).json({ error: 'User already exists' });
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = Date.now().toString();
-    
-    const newUser = { id: userId, email, password: hashedPassword };
-    await redis.set(`user:${email}`, JSON.stringify(newUser));
+    await redis.set(`user:${email}`, JSON.stringify({ id: userId, email, password: hashedPassword }));
     
     const token = jwt.sign({ id: userId, email }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user: { id: userId, email } });
   } catch (err) {
-    console.error('Signup Error:', err.message);
     res.status(500).json({ error: 'Signup failed' });
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const userData = await redis.get(`user:${email}`);
@@ -75,7 +66,6 @@ app.post('/api/auth/login', async (req, res) => {
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user: { id: user.id, email: user.email } });
   } catch (err) {
-    console.error('Login Error:', err.message);
     res.status(500).json({ error: 'Login failed' });
   }
 });
@@ -86,36 +76,24 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/auth/instagram', (req, res) => {
   try {
     const { token } = req.query;
-    if (!token) return res.status(401).send('No token provided');
     const decoded = jwt.verify(token, JWT_SECRET);
-    const userId = decoded.id || decoded.userId || decoded._id || decoded.sub;
+    const userId = decoded.id || decoded.userId || decoded.sub;
     
     const state = Buffer.from(JSON.stringify({ userId, token })).toString('base64');
     const appId = process.env.META_APP_ID;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
-    
-    const scope = [
-      'instagram_basic',
-      'instagram_manage_comments',
-      'instagram_manage_messages',
-      'pages_show_list',
-      'pages_read_engagement',
-      'pages_manage_metadata',
-      'business_management'
-    ].join(',');
+    const scope = ['instagram_basic','instagram_manage_comments','instagram_manage_messages','pages_show_list','pages_read_engagement','pages_manage_metadata','business_management'].join(',');
 
     res.redirect(`https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`);
   } catch (err) {
-    res.status(500).send('Auth failed to start');
+    res.status(500).send('Auth failed');
   }
 });
 
 app.get('/api/auth/instagram/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
-    const decodedState = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
-    const { userId, token: userJwtToken } = decodedState;
-
+    const { userId, token: userJwtToken } = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
     const appId = process.env.META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
@@ -132,11 +110,9 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
         await redis.set(`page_owner:${page.id}`, userId);
-
-        console.log(`🔗 Subscribing to Page: ${page.name}`);
-        const subRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
-        const subResult = await subRes.json();
-        console.log(`✅ Result:`, subResult);
+        
+        // Force Takeover
+        await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
       }
     }
     res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
@@ -146,27 +122,77 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 2. ACCOUNT MANAGEMENT
+// 2. DASHBOARD & DATA
 // -------------------------------------------------------------
-app.delete('/api/accounts/:pageId', authenticateToken, async (req, res) => {
-  try {
-    const { pageId } = req.params;
-    const userId = req.user.id || req.user.userId || req.user._id;
+app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const accountsMap = await redis.hgetall(`user_pages:${userId}`);
+  const accounts = Object.entries(accountsMap || {}).map(([pageId, name]) => ({ pageId, name }));
+  res.json({ accounts });
+});
 
-    await redis.hdel(`user_pages:${userId}`, pageId);
-    await redis.hdel('page_tokens', pageId);
-    await redis.del(`page_owner:${pageId}`);
+app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
+  try {
+    const { pageId } = req.query;
+    const pageToken = await redis.hget('page_tokens', pageId);
+    
+    // Get Instagram Business Account ID
+    const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${pageToken}`);
+    const igData = await igRes.json();
+    const igId = igData.instagram_business_account?.id;
+
+    if (!igId) return res.json({ posts: [] });
+
+    const postsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/media?fields=id,caption,media_url,media_type,thumbnail_url&access_token=${pageToken}`);
+    const postsData = await postsRes.json();
+    res.json({ posts: postsData.data || [] });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load posts' });
+  }
+});
+
+app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const postRules = await redis.hgetall(`post_rules:${userId}`);
+  const parsedRules = {};
+  for (const [mediaId, rule] of Object.entries(postRules || {})) {
+    parsedRules[mediaId] = typeof rule === 'string' ? JSON.parse(rule) : rule;
+  }
+  res.json({ postRules: parsedRules });
+});
+
+app.post('/api/rules/post', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const { mediaId, keyword, responseText, caption, thumbnail } = req.body;
+  await redis.hset(`post_rules:${userId}`, { [mediaId]: JSON.stringify({ keyword, responseText, caption, thumbnail, mediaId }) });
+  res.json({ success: true });
+});
+
+app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  await redis.hdel(`post_rules:${userId}`, req.params.mediaId);
+  res.json({ success: true });
+});
+
+app.delete('/api/user/account', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const email = req.user.email;
+    
+    // Clean up all user data
+    const accounts = await redis.hgetall(`user_pages:${userId}`);
+    for (const pageId of Object.keys(accounts || {})) {
+      await redis.hdel('page_tokens', pageId);
+      await redis.del(`page_owner:${pageId}`);
+    }
+    await redis.del(`user_pages:${userId}`);
+    await redis.del(`post_rules:${userId}`);
+    await redis.del(`user:${email}`);
     
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Delete failed' });
   }
-});
-
-app.get('/api/accounts', authenticateToken, async (req, res) => {
-  const userId = req.user.id || req.user.userId || req.user._id;
-  const accounts = await redis.hgetall(`user_pages:${userId}`);
-  res.json(accounts || {});
 });
 
 // -------------------------------------------------------------
