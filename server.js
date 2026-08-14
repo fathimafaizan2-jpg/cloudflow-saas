@@ -40,6 +40,38 @@ function authenticateToken(req, res, next) {
 // -------------------------------------------------------------
 // 1. OAUTH & ACCOUNT CONNECTION (With Force Takeover)
 // -------------------------------------------------------------
+app.get('/api/auth/instagram', (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) return res.status(401).send('No token provided');
+
+    // Verify user and prepare state
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const state = Buffer.from(JSON.stringify({ userId: decoded.id, token })).toString('base64');
+
+    const appId = process.env.META_APP_ID;
+    const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
+    
+    // Scopes required for DMs, Comments, and App Review
+    const scope = [
+      'instagram_basic',
+      'instagram_manage_comments',
+      'instagram_manage_messages',
+      'pages_show_list',
+      'pages_read_engagement',
+      'pages_manage_metadata',
+      'business_management'
+    ].join(',');
+
+    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
+    
+    res.redirect(authUrl);
+  } catch (err) {
+    console.error('Auth Start Error:', err.message);
+    res.status(500).send('Authentication failed to start');
+  }
+});
+
 app.get('/api/auth/instagram/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
