@@ -19,6 +19,8 @@ const PORT = process.env.PORT || 10000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
+console.log(`🔑 Configured Meta App ID: ${process.env.META_APP_ID || 'MISSING'}`);
+
 // --- MIDDLEWARE ---
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -118,11 +120,13 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         if (igBusinessId) {
           await redis.hset('page_tokens', { [igBusinessId]: page.access_token });
           await redis.set(`page_owner:${igBusinessId}`, userId);
-          // Also save a fallback for testing (ID 0)
-          await redis.set(`page_owner:0`, userId);
           console.log(`🔗 Mapped IG Business ID ${igBusinessId} to User ${userId}`);
         }
         
+        // Also save latest active user as fallback so Test Tool always works
+        await redis.set('fallback_user_id', userId);
+        await redis.set('fallback_token', page.access_token);
+
         await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
       }
     }
@@ -176,6 +180,7 @@ app.post('/api/rules/post', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const { mediaId, keyword, responseText, caption, thumbnail } = req.body;
   await redis.hset(`post_rules:${userId}`, { [mediaId]: JSON.stringify({ keyword, responseText, caption, thumbnail, mediaId }) });
+  console.log(`💾 Rule saved for user ${userId} on media ${mediaId}: "${keyword}" -> "${responseText}"`);
   res.json({ success: true });
 });
 
@@ -200,6 +205,18 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+// Debug endpoint to inspect Redis state
+app.get('/api/debug/status', async (req, res) => {
+  try {
+    const fallbackUser = await redis.get('fallback_user_id');
+    const rules = fallbackUser ? await redis.hgetall(`post_rules:${fallbackUser}`) : {};
+    const tokens = await redis.hgetall('page_tokens');
+    res.json({ fallbackUser, rules, tokenKeys: Object.keys(tokens || {}) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -242,7 +259,7 @@ async function startBackgroundWorker() {
         if (entry.messaging) {
           for (const msg of entry.messaging) {
             if (msg.message?.text) {
-              console.log(`📩 DM Received: "${msg.message.text}"`);
+              console.log(`📩 DM Received: "${msg.message.text}" from ${msg.sender.id}`);
               await processAutomation(igAccountId, msg.sender.id, msg.message.text, 'DM');
             }
           }
@@ -254,7 +271,7 @@ async function startBackgroundWorker() {
               const senderId = change.value.from?.id;
               const mediaId = change.value.media?.id || change.value.post_id;
               if (text) {
-                console.log(`💬 Comment/Feed Received: "${text}" from ${senderId}`);
+                console.log(`💬 Comment/Feed Received: "${text}" from ${senderId} on media ${mediaId}`);
                 await processAutomation(igAccountId, senderId, text, 'COMMENT', mediaId);
               }
             }
@@ -266,24 +283,24 @@ async function startBackgroundWorker() {
 }
 
 async function processAutomation(igAccountId, targetId, text, type, mediaId = null) {
-  // Handle Meta Test Tool (ID 0)
-  let lookupId = igAccountId;
-  if (igAccountId === "0") {
-    console.log('🧪 Test Tool Detected (ID 0). Using fallback owner...');
-    lookupId = "0"; 
+  let userId = await redis.get(`page_owner:${igAccountId}`);
+  let pageToken = await redis.hget('page_tokens', igAccountId);
+
+  // Fallback for Test Tool (ID 0) or unmapped IDs
+  if (!userId || !pageToken) {
+    console.log(`⚠️ Mapping not found for ${igAccountId}. Using fallback active user...`);
+    userId = await redis.get('fallback_user_id');
+    pageToken = await redis.get('fallback_token');
   }
 
-  const userId = await redis.get(`page_owner:${lookupId}`);
-  if (!userId) {
-    console.error(`❌ No user owner found for account ID: ${lookupId}`);
+  if (!userId || !pageToken) {
+    console.error(`❌ Complete failure: No user or token found for automation.`);
     return;
   }
 
   const rules = await redis.hgetall(`post_rules:${userId}`);
-  const pageToken = await redis.hget('page_tokens', lookupId);
-  
-  if (!rules || !pageToken) {
-    console.error(`❌ Missing rules or token for user ${userId} (Account: ${lookupId})`);
+  if (!rules || Object.keys(rules).length === 0) {
+    console.error(`❌ No automation rules found for user ${userId}. Please create a rule in the dashboard!`);
     return;
   }
 
@@ -293,8 +310,9 @@ async function processAutomation(igAccountId, targetId, text, type, mediaId = nu
   for (const [id, data] of Object.entries(rules)) {
     const rule = typeof data === 'string' ? JSON.parse(data) : data;
     
-    // For comments, we check mediaId. For DMs, we check all rules.
-    if (type === 'COMMENT' && mediaId && rule.mediaId !== mediaId && igAccountId !== "0") {
+    // For comments, check mediaId match if it's not a test event
+    if (type === 'COMMENT' && mediaId && rule.mediaId && rule.mediaId !== mediaId && igAccountId !== "0") {
+        console.log(`   - Skipping rule for media ${rule.mediaId} (event was on ${mediaId})`);
         continue;
     }
 
