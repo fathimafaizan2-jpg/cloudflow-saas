@@ -38,6 +38,49 @@ function authenticateToken(req, res, next) {
 }
 
 // -------------------------------------------------------------
+// 0. AUTHENTICATION (Login & Signup) - RESTORED
+// -------------------------------------------------------------
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+    const existingUser = await redis.get(`user:${email}`);
+    if (existingUser) return res.status(400).json({ error: 'User already exists' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = Date.now().toString();
+    
+    const newUser = { id: userId, email, password: hashedPassword };
+    await redis.set(`user:${email}`, JSON.stringify(newUser));
+    
+    const token = jwt.sign({ id: userId, email }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, user: { id: userId, email } });
+  } catch (err) {
+    console.error('Signup Error:', err.message);
+    res.status(500).json({ error: 'Signup failed' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const userData = await redis.get(`user:${email}`);
+    if (!userData) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, user: { id: user.id, email: user.email } });
+  } catch (err) {
+    console.error('Login Error:', err.message);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// -------------------------------------------------------------
 // 1. OAUTH & ACCOUNT CONNECTION
 // -------------------------------------------------------------
 app.get('/api/auth/instagram', (req, res) => {
@@ -86,12 +129,10 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     if (pagesData.data) {
       for (const page of pagesData.data) {
-        // 1. Save Token & Mapping
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
         await redis.set(`page_owner:${page.id}`, userId);
 
-        // 2. Force Takeover (Fixed Fields)
         console.log(`🔗 Subscribing to Page: ${page.name}`);
         const subRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
         const subResult = await subRes.json();
@@ -105,19 +146,17 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 2. ACCOUNT MANAGEMENT (Delete Route)
+// 2. ACCOUNT MANAGEMENT
 // -------------------------------------------------------------
 app.delete('/api/accounts/:pageId', authenticateToken, async (req, res) => {
   try {
     const { pageId } = req.params;
     const userId = req.user.id || req.user.userId || req.user._id;
 
-    // Remove from Redis
     await redis.hdel(`user_pages:${userId}`, pageId);
     await redis.hdel('page_tokens', pageId);
     await redis.del(`page_owner:${pageId}`);
     
-    console.log(`🗑️ Account ${pageId} deleted for user ${userId}`);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Delete failed' });
@@ -162,14 +201,11 @@ async function startBackgroundWorker() {
       const payload = JSON.parse(rawEvent);
       for (const entry of payload.entry || []) {
         const igAccountId = entry.id;
-
-        // DM Handling
         if (entry.messaging) {
           for (const msg of entry.messaging) {
             if (msg.message?.text) await processAutomation(igAccountId, msg.sender.id, msg.message.text, 'DM');
           }
         }
-        // Comment Handling
         if (entry.changes) {
           for (const change of entry.changes) {
             if (change.field === 'comments') await processAutomation(igAccountId, change.value.from.id, change.value.text, 'COMMENT', change.value.media.id);
