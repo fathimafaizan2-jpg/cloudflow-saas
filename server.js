@@ -38,30 +38,19 @@ function authenticateToken(req, res, next) {
 }
 
 // -------------------------------------------------------------
-// 1. OAUTH & ACCOUNT CONNECTION (With Force Takeover)
+// 1. OAUTH & ACCOUNT CONNECTION
 // -------------------------------------------------------------
 app.get('/api/auth/instagram', (req, res) => {
   try {
     const { token } = req.query;
     if (!token) return res.status(401).send('No token provided');
-
-    // Verify user and prepare state
     const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.id || decoded.userId || decoded._id || decoded.sub;
     
-    // Try to find the user ID in common JWT fields
-    const userId = decoded.id || decoded.userId || decoded._id || decoded.sub || decoded.email;
-    
-    if (!userId) {
-      console.error('❌ JWT does not contain a valid ID field:', decoded);
-      return res.status(400).send('Invalid token structure');
-    }
-
     const state = Buffer.from(JSON.stringify({ userId, token })).toString('base64');
-
     const appId = process.env.META_APP_ID;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
     
-    // Scopes required for DMs, Comments, and App Review
     const scope = [
       'instagram_basic',
       'instagram_manage_comments',
@@ -72,12 +61,9 @@ app.get('/api/auth/instagram', (req, res) => {
       'business_management'
     ].join(',');
 
-    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
-    
-    res.redirect(authUrl);
+    res.redirect(`https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`);
   } catch (err) {
-    console.error('Auth Start Error:', err.message);
-    res.status(500).send('Authentication failed to start');
+    res.status(500).send('Auth failed to start');
   }
 });
 
@@ -85,193 +71,142 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     const decodedState = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
-    const userId = decodedState.userId;
-    const userJwtToken = decodedState.token;
+    const { userId, token: userJwtToken } = decodedState;
 
     const appId = process.env.META_APP_ID;
-    const appSecret = process.env.META_APP_SECRET || '';
+    const appSecret = process.env.META_APP_SECRET;
     const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
 
-    // 1. Exchange code for User Access Token
-    const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
-    const tokenRes = await fetch(tokenUrl);
+    const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`);
     const tokenData = await tokenRes.json();
     const userToken = tokenData.access_token;
 
-    // 2. Get the Pages linked to this User
-    const pagesUrl = `https://graph.facebook.com/v19.0/me/accounts?access_token=${userToken}`;
-    const pagesRes = await fetch(pagesUrl);
+    const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${userToken}`);
     const pagesData = await pagesRes.json();
 
     if (pagesData.data) {
       for (const page of pagesData.data) {
-        // Save Page Token and Owner Mapping
+        // 1. Save Token & Mapping
         await redis.hset('page_tokens', { [page.id]: page.access_token });
         await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
         await redis.set(`page_owner:${page.id}`, userId);
 
-        // 3. FORCE TAKEOVER: Tell Meta this app is the Primary Receiver for messages and comments
-        // Note: 'comments' is not a valid field for the Page object subscription; 
-        // Instagram comments are handled via the App Dashboard configuration.
-        console.log(`🔗 Subscribing App to Page: ${page.name} (${page.id})`);
-        const subUrl = `https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`;
-        const subRes = await fetch(subUrl, { method: 'POST' });
+        // 2. Force Takeover (Fixed Fields)
+        console.log(`🔗 Subscribing to Page: ${page.name}`);
+        const subRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
         const subResult = await subRes.json();
-        console.log(`✅ Subscription Result for ${page.name}:`, subResult);
+        console.log(`✅ Result:`, subResult);
       }
     }
     res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
   } catch (err) {
-    console.error('OAuth Error:', err.message);
     res.redirect('/?error=oauth_failed');
   }
 });
 
 // -------------------------------------------------------------
-// 2. WEBHOOK ENDPOINTS (The "Ear" of your App)
+// 2. ACCOUNT MANAGEMENT (Delete Route)
+// -------------------------------------------------------------
+app.delete('/api/accounts/:pageId', authenticateToken, async (req, res) => {
+  try {
+    const { pageId } = req.params;
+    const userId = req.user.id || req.user.userId || req.user._id;
+
+    // Remove from Redis
+    await redis.hdel(`user_pages:${userId}`, pageId);
+    await redis.hdel('page_tokens', pageId);
+    await redis.del(`page_owner:${pageId}`);
+    
+    console.log(`🗑️ Account ${pageId} deleted for user ${userId}`);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+app.get('/api/accounts', authenticateToken, async (req, res) => {
+  const userId = req.user.id || req.user.userId || req.user._id;
+  const accounts = await redis.hgetall(`user_pages:${userId}`);
+  res.json(accounts || {});
+});
+
+// -------------------------------------------------------------
+// 3. WEBHOOKS
 // -------------------------------------------------------------
 app.get('/webhook', (req, res) => {
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
-    console.log('✅ Webhook Verified Successfully');
     return res.status(200).send(req.query['hub.challenge']);
   }
   res.sendStatus(403);
 });
 
 app.post('/webhook', async (req, res) => {
-  // DIAGNOSTIC LOG: See if Meta is even touching your server
   console.log('📬 RAW WEBHOOK HIT! Object:', req.body.object);
-
   if (req.body.object === 'instagram' || req.body.object === 'page') {
-    try {
-      await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
-      return res.status(200).send('EVENT_RECEIVED');
-    } catch (err) {
-      console.error('Queue Error:', err.message);
-      return res.sendStatus(500);
-    }
+    await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
+    return res.status(200).send('EVENT_RECEIVED');
   }
   res.sendStatus(404);
 });
 
 // -------------------------------------------------------------
-// 3. BACKGROUND WORKER (The "Brain" that processes events)
+// 4. BACKGROUND WORKER
 // -------------------------------------------------------------
 async function startBackgroundWorker() {
-  console.log('👷 CloudFlow Automation Engine Active...');
+  console.log('👷 Engine Active...');
   while (true) {
     try {
       const rawEvent = await redis.rpop('meta_webhook_queue');
-      if (!rawEvent) {
-        await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds if queue is empty
-        continue;
-      }
+      if (!rawEvent) { await new Promise(r => setTimeout(r, 2000)); continue; }
 
       const payload = JSON.parse(rawEvent);
       for (const entry of payload.entry || []) {
-        const igAccountId = entry.id; // This is the ID of the Page or IG account receiving the event
+        const igAccountId = entry.id;
 
-        // --- PRIORITY 1: DIRECT MESSAGES (DMs) ---
+        // DM Handling
         if (entry.messaging) {
-          for (const msgEvent of entry.messaging) {
-            const senderId = msgEvent.sender?.id;
-            const text = msgEvent.message?.text || '';
-            if (senderId && text) {
-              console.log(`📩 DM Received from ${senderId}: "${text}"`);
-              await runAutomationLogic(igAccountId, senderId, text, 'DM');
-            }
+          for (const msg of entry.messaging) {
+            if (msg.message?.text) await processAutomation(igAccountId, msg.sender.id, msg.message.text, 'DM');
           }
         }
-
-        // --- PRIORITY 2: COMMENTS ---
+        // Comment Handling
         if (entry.changes) {
           for (const change of entry.changes) {
-            if (change.field === 'comments') {
-              const senderId = change.value.from?.id;
-              const text = change.value.text || '';
-              const mediaId = change.value.media?.id;
-              if (senderId && text) {
-                console.log(`💬 Comment Received on Media ${mediaId}: "${text}"`);
-                await runAutomationLogic(igAccountId, senderId, text, 'COMMENT', mediaId);
-              }
-            }
+            if (change.field === 'comments') await processAutomation(igAccountId, change.value.from.id, change.value.text, 'COMMENT', change.value.media.id);
           }
         }
       }
-    } catch (err) {
-      console.error('Worker Processing Error:', err.message);
-    }
+    } catch (err) { console.error('Worker Error:', err.message); }
   }
 }
 
-// -------------------------------------------------------------
-// 4. AUTOMATION LOGIC (Keyword Matching & Replying)
-// -------------------------------------------------------------
-async function runAutomationLogic(igAccountId, targetUserId, incomingText, type, mediaId = null) {
-  try {
-    // 1. Find which user owns this Page/IG Account
-    const userId = await redis.get(`page_owner:${igAccountId}`);
-    if (!userId) {
-      console.log(`⚠️ No owner found for Account ID: ${igAccountId}`);
+async function processAutomation(igAccountId, targetId, text, type, mediaId = null) {
+  const userId = await redis.get(`page_owner:${igAccountId}`);
+  if (!userId) return;
+
+  const rules = await redis.hgetall(`post_rules:${userId}`);
+  const pageToken = await redis.hget('page_tokens', igAccountId);
+  if (!rules || !pageToken) return;
+
+  const input = text.toUpperCase().trim();
+  for (const [id, data] of Object.entries(rules)) {
+    const rule = typeof data === 'string' ? JSON.parse(data) : data;
+    if (type === 'COMMENT' && rule.mediaId !== mediaId) continue;
+
+    const trigger = rule.keyword?.toUpperCase().trim() || 'ANY';
+    if (trigger === 'ANY' || input === trigger || input.includes(trigger)) {
+      await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${pageToken}` },
+        body: JSON.stringify({ recipient: { id: targetId }, message: { text: rule.responseText } })
+      });
+      console.log(`✅ ${type} Sent!`);
       return;
     }
-
-    // 2. Fetch all automation rules for this user
-    const rules = await redis.hgetall(`post_rules:${userId}`);
-    if (!rules) return;
-
-    const pageToken = await redis.hget('page_tokens', igAccountId);
-    if (!pageToken) return;
-
-    const cleanInput = incomingText.toUpperCase().trim();
-
-    for (const [ruleId, ruleDataRaw] of Object.entries(rules)) {
-      const rule = typeof ruleDataRaw === 'string' ? JSON.parse(ruleDataRaw) : ruleDataRaw;
-      const trigger = rule.keyword ? rule.keyword.toUpperCase().trim() : 'ANY';
-
-      // --- CONDITION MATCHING ---
-      
-      // A. If it's a comment, it MUST match the specific Post (mediaId)
-      if (type === 'COMMENT' && rule.mediaId !== mediaId) continue;
-
-      // B. Keyword Match Check
-      const isMatch = (trigger === 'ANY') || 
-                      (cleanInput === trigger) || 
-                      (cleanInput.includes(trigger));
-
-      if (isMatch) {
-        console.log(`🎯 Match! Trigger: "${trigger}" -> Sending ${type} Response.`);
-        
-        // 3. Send the DM Response via Meta API
-        const response = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json', 
-            'Authorization': `Bearer ${pageToken}` 
-          },
-          body: JSON.stringify({
-            recipient: { id: targetUserId },
-            message: { text: rule.responseText }
-          })
-        });
-
-        const result = await response.json();
-        if (result.message_id) {
-          console.log(`✅ Auto-Reply Sent to ${targetUserId}`);
-        } else {
-          console.error(`❌ Meta API Error:`, result.error?.message || result);
-        }
-        
-        return; // Stop after first match
-      }
-    }
-  } catch (err) {
-    console.error('Automation Logic Error:', err.message);
   }
 }
 
-// --- START SERVER ---
 app.listen(PORT, () => {
-  console.log(`🚀 CloudFlow Active on Port ${PORT}`);
+  console.log(`🚀 Active on Port ${PORT}`);
   startBackgroundWorker();
 });
