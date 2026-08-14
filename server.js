@@ -111,8 +111,10 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         await redis.set(`page_owner:${page.id}`, userId);
 
         // 3. FORCE TAKEOVER: Tell Meta this app is the Primary Receiver for messages and comments
+        // Note: 'comments' is not a valid field for the Page object subscription; 
+        // Instagram comments are handled via the App Dashboard configuration.
         console.log(`🔗 Subscribing App to Page: ${page.name} (${page.id})`);
-        const subUrl = `https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,comments&access_token=${page.access_token}`;
+        const subUrl = `https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`;
         const subRes = await fetch(subUrl, { method: 'POST' });
         const subResult = await subRes.json();
         console.log(`✅ Subscription Result for ${page.name}:`, subResult);
