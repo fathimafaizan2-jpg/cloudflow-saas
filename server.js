@@ -15,6 +15,13 @@ const PORT = process.env.PORT || 10000;
 const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'my_secret_token_123').trim();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
+// --- HELPER: SAFE PARSE ---
+const safeParse = (val) => {
+  if (!val) return null;
+  if (typeof val === 'object') return val;
+  try { return JSON.parse(val); } catch (e) { return null; }
+};
+
 // --- AUTH ---
 app.post('/api/signup', async (req, res) => {
   const { email, password } = req.body;
@@ -25,13 +32,13 @@ app.post('/api/signup', async (req, res) => {
 
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-  const user = JSON.parse(await redis.get(`user:${email}`) || '{}');
-  if (user.id && await bcrypt.compare(password, user.password)) {
+  const user = safeParse(await redis.get(`user:${email}`));
+  if (user && user.id && await bcrypt.compare(password, user.password)) {
     res.json({ token: jwt.sign({ id: user.id, email: user.email }, JWT_SECRET), user: { id: user.id, email: user.email } });
   } else res.status(401).json({ error: 'Fail' });
 });
 
-// --- OAUTH & FORCE SUBSCRIPTION ---
+// --- OAUTH & SUBSCRIPTION ---
 app.get('/api/auth/instagram', (req, res) => {
   const decoded = jwt.verify(req.query.token, JWT_SECRET);
   const state = Buffer.from(JSON.stringify({ userId: decoded.id, token: req.query.token })).toString('base64');
@@ -52,21 +59,14 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
       const igRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account&access_token=${page.access_token}`);
       const igData = await igRes.json();
       const igId = igData.instagram_business_account?.id;
-      
       await redis.hset('page_tokens', { [page.id]: page.access_token });
       await redis.set(`page_owner:${page.id}`, userId);
       await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
-      
       if (igId) {
         await redis.hset('page_tokens', { [igId]: page.access_token });
         await redis.set(`page_owner:${igId}`, userId);
-        console.log(`🔗 Linked IG: ${igId} to User: ${userId}`);
       }
-      
-      // --- FIXED SUBSCRIPTION LINE: ADDED messages and messaging_postbacks ---
-      const subRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=feed,messages,messaging_postbacks&access_token=${page.access_token}`, { method: 'POST' });
-      const subData = await subRes.json();
-      console.log(`📡 Subscription for ${page.name}:`, subData);
+      await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=feed,messages,messaging_postbacks&access_token=${page.access_token}`, { method: 'POST' });
     }
     res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
   } catch (err) { res.redirect('/?error=oauth_failed'); }
@@ -79,7 +79,7 @@ app.get('/api/dashboard-data', async (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     const rules = await redis.hgetall(`post_rules:${decoded.id}`);
     const parsed = {};
-    for (const [k, v] of Object.entries(rules || {})) { parsed[k] = typeof v === 'string' ? JSON.parse(v) : v; }
+    for (const [k, v] of Object.entries(rules || {})) { parsed[k] = safeParse(v); }
     res.json({ postRules: parsed });
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
@@ -118,7 +118,7 @@ app.get('/api/instagram/posts', async (req, res) => {
 
 // --- WEBHOOK & WORKER ---
 app.post('/webhook', async (req, res) => {
-  console.log('📬 WEBHOOK HIT:', JSON.stringify(req.body));
+  console.log('📬 WEBHOOK HIT');
   await redis.lpush('webhook_queue', JSON.stringify(req.body));
   res.status(200).send('EVENT_RECEIVED');
 });
@@ -129,25 +129,34 @@ app.get('/webhook', (req, res) => {
 });
 
 async function worker() {
+  console.log('👷 Indestructible Worker Active...');
   while (true) {
     try {
       const raw = await redis.rpop('webhook_queue');
       if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
-      const data = JSON.parse(raw);
+      
+      const data = safeParse(raw); // <--- FIXED: SAFE PARSE
+      if (!data) continue;
+
       for (const entry of data.entry || []) {
-        const userId = await redis.get(`page_owner:${entry.id}`);
-        const token = await redis.hget('page_tokens', entry.id);
+        const targetId = entry.id;
+        const userId = await redis.get(`page_owner:${targetId}`);
+        const token = await redis.hget('page_tokens', targetId);
         if (!userId || !token) continue;
+
         const rules = await redis.hgetall(`post_rules:${userId}`);
         const items = [...(entry.changes || []), ...(entry.messaging || [])];
+        
         for (const item of items) {
           const val = item.value || item.message || item;
           const text = val.text || val.message;
           const senderId = val.from?.id || item.sender?.id;
           if (!text || !senderId) continue;
+
           for (const rStr of Object.values(rules)) {
-            const rule = JSON.parse(rStr);
-            if (text.toUpperCase().includes(rule.keyword.toUpperCase())) {
+            const rule = safeParse(rStr); // <--- FIXED: SAFE PARSE
+            if (rule && text.toUpperCase().includes(rule.keyword.toUpperCase())) {
+              console.log(`🎯 MATCH! Sending DM to ${senderId}`);
               await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
