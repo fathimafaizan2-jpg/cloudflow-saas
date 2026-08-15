@@ -19,35 +19,25 @@ const PORT = process.env.PORT || 10000;
 const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'my_secret_token_123').trim();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
-// --- DIAGNOSTIC ROUTE ---
-app.get('/api/debug/status', async (req, res) => {
-  try {
-    const keys = await redis.keys('*');
-    res.json({ keys, appId: APP_ID, port: PORT });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- AUTH ---
-app.post('/api/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const userData = await redis.get(`user:${email}`);
-    if (!userData) return res.status(401).json({ error: 'Invalid credentials' });
-    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
-    const valid = await bcrypt.compare(password, user.password);
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { id: user.id, email: user.email } });
-  } catch (err) { res.status(500).json({ error: 'Login failed' }); }
-});
-
 // --- OAUTH & SUBSCRIPTION ---
 app.get('/api/auth/instagram', (req, res) => {
   const { token } = req.query;
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const state = Buffer.from(JSON.stringify({ userId: decoded.id, token })).toString('base64');
-    const scope = ['instagram_basic','instagram_manage_comments','instagram_manage_messages','pages_show_list','pages_read_engagement','pages_manage_metadata','business_management'].join(',');
+    
+    // --- ADDED pages_messaging TO THE SCOPE ---
+    const scope = [
+      'instagram_basic',
+      'instagram_manage_comments',
+      'instagram_manage_messages',
+      'pages_show_list',
+      'pages_read_engagement',
+      'pages_manage_metadata',
+      'pages_messaging', // <--- THIS IS THE FIX
+      'business_management'
+    ].join(',');
+    
     const oauthUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${encodeURIComponent(`https://${req.get('host')}/api/auth/instagram/callback`)}&scope=${scope}&state=${state}`;
     res.redirect(oauthUrl);
   } catch (err) { res.redirect('/?error=auth_init_failed'); }
@@ -83,8 +73,8 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         console.log(`🔗 Linked IG: ${igId} to User: ${userId}`);
       }
       
-      // --- THE CRITICAL SUBSCRIPTION LOG ---
-      const subRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
+      // --- SIMPLIFIED SUBSCRIPTION TO AVOID ERROR ---
+      const subRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=feed&access_token=${page.access_token}`, { method: 'POST' });
       const subData = await subRes.json();
       console.log(`📡 Subscription Result for Page ${page.name}:`, subData);
     }
@@ -95,5 +85,5 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
   }
 });
 
-// ... (Rest of your routes for dashboard, posts, and worker remain the same)
+// ... (Rest of your code remains the same)
 app.listen(PORT, () => { console.log(`🚀 Server on ${PORT}`); });
