@@ -9,13 +9,17 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// --- DIAGNOSTIC LOG ---
+const APP_ID = (process.env.META_APP_ID || '').trim();
+console.log(`🛠️  BOOT CHECK: Using Meta App ID: "${APP_ID}"`);
+
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
 const PORT = process.env.PORT || 10000;
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_secret_token_123';
+const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'my_secret_token_123').trim();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
 // --- MASTER RESET ---
@@ -54,18 +58,33 @@ app.post('/api/login', async (req, res) => {
 // --- OAUTH ---
 app.get('/api/auth/instagram', (req, res) => {
   const { token } = req.query;
-  const decoded = jwt.verify(token, JWT_SECRET);
-  const state = Buffer.from(JSON.stringify({ userId: decoded.id, token })).toString('base64');
-  const scope = ['instagram_basic','instagram_manage_comments','instagram_manage_messages','pages_show_list','pages_read_engagement','pages_manage_metadata','business_management'].join(',');
-  res.redirect(`https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.META_APP_ID}&redirect_uri=${encodeURIComponent(`https://${req.get('host')}/api/auth/instagram/callback`)}&scope=${scope}&state=${state}`);
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const state = Buffer.from(JSON.stringify({ userId: decoded.id, token })).toString('base64');
+    const scope = ['instagram_basic','instagram_manage_comments','instagram_manage_messages','pages_show_list','pages_read_engagement','pages_manage_metadata','business_management'].join(',');
+    
+    const oauthUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${encodeURIComponent(`https://${req.get('host')}/api/auth/instagram/callback`)}&scope=${scope}&state=${state}`;
+    
+    console.log(`🔗 Redirecting to Facebook with App ID: ${APP_ID}`);
+    res.redirect(oauthUrl);
+  } catch (err) {
+    console.error('OAuth Start Error:', err.message);
+    res.redirect('/?error=auth_init_failed');
+  }
 });
 
 app.get('/api/auth/instagram/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     const { userId, token: userJwtToken } = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
-    const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?client_id=${process.env.META_APP_ID}&redirect_uri=${encodeURIComponent(`https://${req.get('host')}/api/auth/instagram/callback`)}&client_secret=${process.env.META_APP_SECRET}&code=${code}`);
+    
+    const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${APP_ID}&redirect_uri=${encodeURIComponent(`https://${req.get('host')}/api/auth/instagram/callback`)}&client_secret=${process.env.META_APP_SECRET.trim()}&code=${code}`;
+    
+    const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
+    
+    if (tokenData.error) throw new Error(tokenData.error.message);
+
     const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${tokenData.access_token}`);
     const pagesData = await pagesRes.json();
 
@@ -83,23 +102,26 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         await redis.set(`page_owner:${igId}`, userId);
         console.log(`🔗 Linked IG: ${igId} to User: ${userId}`);
       }
-      await redis.set('fallback_user', userId);
-      await redis.set('fallback_token', page.access_token);
       
       await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
     }
     res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
-  } catch (err) { res.redirect('/?error=oauth_failed'); }
+  } catch (err) { 
+    console.error('OAuth Callback Error:', err.message);
+    res.redirect('/?error=oauth_failed'); 
+  }
 });
 
-// --- DASHBOARD ---
+// --- DASHBOARD DATA ---
 app.get('/api/dashboard-data', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     const rules = await redis.hgetall(`post_rules:${decoded.id}`);
     const parsed = {};
-    for (const [k, v] of Object.entries(rules || {})) { parsed[k] = typeof v === 'string' ? JSON.parse(v) : v; }
+    for (const [k, v] of Object.entries(rules || {})) { 
+      parsed[k] = typeof v === 'string' ? JSON.parse(v) : v; 
+    }
     res.json({ postRules: parsed });
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
@@ -146,10 +168,9 @@ app.delete('/api/user/account', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// --- WEBHOOK & INDESTRUCTIBLE WORKER ---
+// --- WEBHOOK & WORKER ---
 app.post('/webhook', async (req, res) => {
   console.log('📬 WEBHOOK RECEIVED');
-  // Store raw body securely as a JSON string to prevent [object Object] errors
   await redis.lpush('webhook_queue', JSON.stringify(req.body));
   res.status(200).send('EVENT_RECEIVED');
 });
@@ -160,20 +181,20 @@ app.get('/webhook', (req, res) => {
 });
 
 async function worker() {
-  console.log('👷 Indestructible Worker Active...');
+  console.log('👷 Safe Worker Active...');
   while (true) {
     try {
       const raw = await redis.rpop('webhook_queue');
       if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
       
-      // Defensively parse JSON whether it's a string or already an object
       const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
       
       for (const entry of data.entry || []) {
         const igId = entry.id;
-        const userId = await redis.get(`page_owner:${igId}`) || await redis.get('fallback_user');
-        const token = await redis.hget('page_tokens', igId) || await redis.get('fallback_token');
-        if (!userId || !token) { console.log(`⚠️ No owner for ID: ${igId}`); continue; }
+        const userId = await redis.get(`page_owner:${igId}`);
+        const token = await redis.hget('page_tokens', igId);
+        
+        if (!userId || !token) continue;
         
         const rules = await redis.hgetall(`post_rules:${userId}`);
         const items = [...(entry.changes || []), ...(entry.messaging || [])];
@@ -184,24 +205,24 @@ async function worker() {
           const senderId = (val.from?.id) || (item.sender?.id);
           if (!text || !senderId) continue;
 
-          console.log(`🔎 Checking text: "${text}" from ${senderId}`);
           for (const ruleStr of Object.values(rules)) {
             const rule = typeof ruleStr === 'string' ? JSON.parse(ruleStr) : ruleStr;
-            const keyword = rule.keyword.toUpperCase();
-            if (text.toUpperCase().includes(keyword)) {
+            if (text.toUpperCase().includes(rule.keyword.toUpperCase())) {
               console.log(`🎯 MATCH! Sending DM to ${senderId}`);
               await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ recipient: { id: senderId }, message: { text: rule.responseText } })
               });
-              console.log(`✅ DM Sent Successfully!`);
             }
           }
         }
       }
-    } catch (err) { console.error('Worker Safe Catch Error:', err.message); }
+    } catch (err) { console.error('Worker Error:', err.message); }
   }
 }
 
-app.listen(PORT, () => { console.log(`🚀 Server on ${PORT}`); worker(); });
+app.listen(PORT, () => { 
+  console.log(`🚀 Server on ${PORT}`); 
+  worker(); 
+});
