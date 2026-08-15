@@ -22,7 +22,7 @@ const safeParse = (val) => {
   try { return JSON.parse(val); } catch (e) { return null; }
 };
 
-// --- AUTH & ADMIN ---
+// --- ADMIN & AUTH ---
 app.get('/api/admin/master-reset', async (req, res) => { await redis.flushall(); res.send('<h1>✅ Database Wiped</h1>'); });
 app.post('/api/signup', async (req, res) => {
   const { email, password } = req.body;
@@ -64,7 +64,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
       if (igId) {
         await redis.hset('page_tokens', { [igId]: page.access_token });
         await redis.set(`page_owner:${igId}`, userId);
-        await redis.set('last_active_ig', igId); // FALLBACK
+        await redis.set('last_active_ig', igId); // SAFETY FALLBACK
       }
       await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=feed,messages,messaging_postbacks&access_token=${page.access_token}`, { method: 'POST' });
     }
@@ -72,7 +72,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
   } catch (err) { res.redirect('/?error=oauth_failed'); }
 });
 
-// --- DASHBOARD DATA ---
+// --- DATA ---
 app.get('/api/dashboard-data', async (req, res) => {
   try {
     const decoded = jwt.verify(req.headers.authorization?.split(' ')[1], JWT_SECRET);
@@ -112,7 +112,7 @@ app.get('/api/instagram/posts', async (req, res) => {
 
 // --- WEBHOOK ---
 app.post('/webhook', async (req, res) => {
-  console.log('📬 [WEBHOOK HIT] Body:', JSON.stringify(req.body));
+  console.log('📬 RAW WEBHOOK HIT!');
   await redis.lpush('webhook_queue', JSON.stringify(req.body));
   res.status(200).send('EVENT_RECEIVED');
 });
@@ -121,47 +121,66 @@ app.get('/webhook', (req, res) => {
   else res.sendStatus(403);
 });
 
-// --- WORKER ---
+// --- WORKER (DIAGNOSTIC MODE) ---
 async function worker() {
-  console.log('👷 Final Worker Active...');
+  console.log('👷 Diagnostic Worker Active...');
   while (true) {
     try {
       const raw = await redis.rpop('webhook_queue');
       if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
       const data = safeParse(raw);
       if (!data) continue;
+
       for (const entry of data.entry || []) {
         let igId = entry.id;
-        if (igId === "0") igId = await redis.get('last_active_ig'); // TEST TOOL FALLBACK
+        if (igId === "0") {
+            console.log('⚠️ Test Tool detected (ID: 0). Using last active IG fallback...');
+            igId = await redis.get('last_active_ig');
+        }
         
         const userId = await redis.get(`page_owner:${igId}`);
         const token = await redis.hget('page_tokens', igId);
-        if (!userId || !token) { console.log(`⚠️ No mapping for ID: ${igId}`); continue; }
+        if (!userId || !token) {
+            console.log(`❌ No mapping found for IG ID: ${igId}`);
+            continue;
+        }
 
         const rules = await redis.hgetall(`post_rules:${userId}`);
         const items = [...(entry.changes || []), ...(entry.messaging || [])];
+        
         for (const item of items) {
           const val = item.value || item.message || item;
           const text = (val.text || val.message || '').toUpperCase();
           const senderId = val.from?.id || item.sender?.id;
           if (!text || !senderId) continue;
-          
-          console.log(`🔎 Checking text: "${text}" from ${senderId}`);
+
+          console.log(`🔎 Checking 1 rules for user ${userId}...`);
           for (const rStr of Object.values(rules)) {
             const rule = safeParse(rStr);
             if (rule && text.includes(rule.keyword.toUpperCase())) {
-              console.log(`🎯 MATCH! Sending DM to ${senderId}`);
-              await fetch(`https://graph.facebook.com/v19.0/${igId}/messages`, {
+              console.log(`🎯 MATCH! Triggering DM to ${senderId}...`);
+              
+              const response = await fetch(`https://graph.facebook.com/v19.0/${igId}/messages`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ recipient: { id: senderId }, message: { text: rule.responseText } })
               });
-              console.log('✅ DM Sent Successfully!');
+              
+              const result = await response.json();
+              if (response.ok) {
+                console.log(`✅ DM SUCCESS: ${JSON.stringify(result)}`);
+              } else {
+                console.error(`❌ META API ERROR: Code #${result.error?.code} - ${result.error?.message}`);
+                console.log(`💡 Tip: Check if tester ${senderId} is a Professional account and has accepted all invites.`);
+              }
+            } else {
+                console.log(`- Comparing "${text}" to trigger "${rule?.keyword}" -> No Match`);
             }
           }
         }
       }
-    } catch (err) { console.error('Worker Error:', err.message); }
+    } catch (err) { console.error('Worker Critical Error:', err.message); }
   }
 }
-app.listen(PORT, () => { console.log(`🚀 Server on ${PORT}`); worker(); });
+
+app.listen(PORT, () => { console.log(`🚀 Server running on port ${PORT}`); worker(); });
