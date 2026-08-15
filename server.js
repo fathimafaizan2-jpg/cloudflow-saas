@@ -15,23 +15,25 @@ const PORT = process.env.PORT || 10000;
 const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'my_secret_token_123').trim();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
-// --- ADMIN ---
-app.get('/api/admin/master-reset', async (req, res) => { await redis.flushall(); res.send('<h1>✅ Database Wiped</h1>'); });
+// --- HELPERS ---
+const safeParse = (val) => {
+  if (!val) return null;
+  if (typeof val === 'object') return val;
+  try { return JSON.parse(val); } catch (e) { return null; }
+};
 
-// --- AUTH ---
+// --- AUTH & ADMIN ---
+app.get('/api/admin/master-reset', async (req, res) => { await redis.flushall(); res.send('<h1>✅ Database Wiped</h1>'); });
 app.post('/api/signup', async (req, res) => {
   const { email, password } = req.body;
   const userId = Date.now().toString();
   await redis.set(`user:${email}`, JSON.stringify({ id: userId, email, password: await bcrypt.hash(password, 10) }));
   res.json({ token: jwt.sign({ id: userId, email }, JWT_SECRET), user: { id: userId, email } });
 });
-
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-  const userData = await redis.get(`user:${email}`);
-  if (!userData) return res.status(401).json({ error: 'Fail' });
-  const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
-  if (await bcrypt.compare(password, user.password)) {
+  const user = safeParse(await redis.get(`user:${email}`));
+  if (user && user.id && await bcrypt.compare(password, user.password)) {
     res.json({ token: jwt.sign({ id: user.id, email: user.email }, JWT_SECRET), user: { id: user.id, email: user.email } });
   } else res.status(401).json({ error: 'Fail' });
 });
@@ -62,6 +64,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
       if (igId) {
         await redis.hset('page_tokens', { [igId]: page.access_token });
         await redis.set(`page_owner:${igId}`, userId);
+        await redis.set('last_active_ig', igId); // FALLBACK
       }
       await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=feed,messages,messaging_postbacks&access_token=${page.access_token}`, { method: 'POST' });
     }
@@ -69,17 +72,16 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
   } catch (err) { res.redirect('/?error=oauth_failed'); }
 });
 
-// --- DATA ---
+// --- DASHBOARD DATA ---
 app.get('/api/dashboard-data', async (req, res) => {
   try {
     const decoded = jwt.verify(req.headers.authorization?.split(' ')[1], JWT_SECRET);
     const rules = await redis.hgetall(`post_rules:${decoded.id}`);
     const parsed = {};
-    for (const [k, v] of Object.entries(rules || {})) { parsed[k] = typeof v === 'string' ? JSON.parse(v) : v; }
+    for (const [k, v] of Object.entries(rules || {})) { parsed[k] = safeParse(v); }
     res.json({ postRules: parsed });
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
-
 app.post('/api/rules/post', async (req, res) => {
   try {
     const decoded = jwt.verify(req.headers.authorization?.split(' ')[1], JWT_SECRET);
@@ -87,7 +89,6 @@ app.post('/api/rules/post', async (req, res) => {
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
-
 app.get('/api/instagram/accounts', async (req, res) => {
   try {
     const decoded = jwt.verify(req.headers.authorization?.split(' ')[1], JWT_SECRET);
@@ -95,7 +96,6 @@ app.get('/api/instagram/accounts', async (req, res) => {
     res.json({ accounts: Object.entries(accounts || {}).map(([pageId, name]) => ({ pageId, name })) });
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
-
 app.get('/api/instagram/posts', async (req, res) => {
   try {
     const { pageId } = req.query;
@@ -112,11 +112,10 @@ app.get('/api/instagram/posts', async (req, res) => {
 
 // --- WEBHOOK ---
 app.post('/webhook', async (req, res) => {
-  console.log('📬 WEBHOOK HIT');
+  console.log('📬 [WEBHOOK HIT] Body:', JSON.stringify(req.body));
   await redis.lpush('webhook_queue', JSON.stringify(req.body));
   res.status(200).send('EVENT_RECEIVED');
 });
-
 app.get('/webhook', (req, res) => {
   if (req.query['hub.verify_token'] === VERIFY_TOKEN) res.send(req.query['hub.challenge']);
   else res.sendStatus(403);
@@ -124,28 +123,34 @@ app.get('/webhook', (req, res) => {
 
 // --- WORKER ---
 async function worker() {
-  console.log('👷 Engine Active...');
+  console.log('👷 Final Worker Active...');
   while (true) {
     try {
       const raw = await redis.rpop('webhook_queue');
       if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
-      const data = JSON.parse(raw);
+      const data = safeParse(raw);
+      if (!data) continue;
       for (const entry of data.entry || []) {
-        const igId = entry.id;
+        let igId = entry.id;
+        if (igId === "0") igId = await redis.get('last_active_ig'); // TEST TOOL FALLBACK
+        
         const userId = await redis.get(`page_owner:${igId}`);
         const token = await redis.hget('page_tokens', igId);
-        if (!userId || !token) continue;
+        if (!userId || !token) { console.log(`⚠️ No mapping for ID: ${igId}`); continue; }
+
         const rules = await redis.hgetall(`post_rules:${userId}`);
         const items = [...(entry.changes || []), ...(entry.messaging || [])];
         for (const item of items) {
           const val = item.value || item.message || item;
-          const text = val.text || val.message;
+          const text = (val.text || val.message || '').toUpperCase();
           const senderId = val.from?.id || item.sender?.id;
           if (!text || !senderId) continue;
+          
+          console.log(`🔎 Checking text: "${text}" from ${senderId}`);
           for (const rStr of Object.values(rules)) {
-            const rule = JSON.parse(rStr);
-            if (text.toUpperCase().includes(rule.keyword.toUpperCase())) {
-              // --- FIXED ENDPOINT: Using igId instead of 'me' ---
+            const rule = safeParse(rStr);
+            if (rule && text.includes(rule.keyword.toUpperCase())) {
+              console.log(`🎯 MATCH! Sending DM to ${senderId}`);
               await fetch(`https://graph.facebook.com/v19.0/${igId}/messages`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -159,5 +164,4 @@ async function worker() {
     } catch (err) { console.error('Worker Error:', err.message); }
   }
 }
-
 app.listen(PORT, () => { console.log(`🚀 Server on ${PORT}`); worker(); });
