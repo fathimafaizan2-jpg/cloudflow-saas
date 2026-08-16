@@ -138,9 +138,9 @@
 
   <!-- Chatbot Floating Button (Center-Right for better accessibility) -->
   <div class="fixed bottom-24 right-6 z-[60]">
-    <button onclick="toggleChatbot()" class="w-16 h-16 btn-primary rounded-full shadow-2xl flex items-center justify-center text-2xl hover:scale-110 transition shadow-[0_0_30px_rgba(139,92,246,0.6)] border-2 border-white/20"><i class="fa-solid fa-stethoscope"></i></button>
+    <button onclick="toggleChatbot()" class="w-16 h-16 btn-primary rounded-full shadow-2xl flex items-center justify-center text-2xl hover:scale-110 transition shadow-[0_0_30px_rgba(139,92,246,0.6)] border-2 border-white/20"><i class="fa-solid fa-robot"></i></button>
     <div id="chatbot-window" class="hidden absolute bottom-20 right-0 w-[min(24rem,calc(100vw-2rem))] glass rounded-3xl shadow-2xl overflow-hidden border border-purple-500/40">
-      <div class="btn-primary p-4 flex items-center justify-between"><span class="font-semibold"><i class="fa-solid fa-stethoscope mr-2"></i>Cloudflow Support</span><button onclick="toggleChatbot()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="btn-primary p-4 flex items-center justify-between"><span class="font-semibold"><i class="fa-solid fa-robot mr-2"></i>Cloudflow Support</span><button onclick="toggleChatbot()"><i class="fa-solid fa-xmark"></i></button></div>
       <div id="chat-content" class="p-4 h-64 overflow-y-auto space-y-3 text-sm bg-slate-950/35"><div class="bg-slate-800 p-3 rounded-xl">Run a system scan to check your connection, rules, and most recent Meta error.</div></div>
       <div class="p-3 border-t border-slate-700 flex gap-2"><button onclick="runDiagnosis()" class="flex-1 btn-primary py-2 rounded-lg text-xs font-bold uppercase tracking-wider">Run system scan</button><a href="mailto:support@cloudflow.com?subject=Cloudflow%20support" class="btn-secondary px-3 py-2 rounded-lg text-xs">HUMAN</a></div>
     </div>
