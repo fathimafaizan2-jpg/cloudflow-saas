@@ -36,7 +36,20 @@ function authenticateToken(req, res, next) {
 }
 
 // -------------------------------------------------------------
-// 0. AUTHENTICATION (Login & Signup)
+// 0. ADMIN & MASTER RESET
+// -------------------------------------------------------------
+app.get('/api/admin/master-reset', async (req, res) => {
+  try {
+    await redis.flushall();
+    console.log('🧹 MASTER RESET: Redis database wiped successfully.');
+    res.send('<h1>✅ Database Wiped Successfully! You can now reconnect your account.</h1>');
+  } catch (err) {
+    res.status(500).send('<h1>❌ Wipe Failed: ' + err.message + '</h1>');
+  }
+});
+
+// -------------------------------------------------------------
+// 0.1 AUTHENTICATION (Login & Signup)
 // -------------------------------------------------------------
 app.post('/api/signup', async (req, res) => {
   try {
@@ -123,7 +136,6 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
           console.log(`🔗 Mapped IG Business ID ${igBusinessId} to User ${userId}`);
         }
         
-        // Also save latest active user as fallback so Test Tool always works
         await redis.set('fallback_user_id', userId);
         await redis.set('fallback_token', page.access_token);
 
@@ -190,33 +202,26 @@ app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/user/account', authenticateToken, async (req, res) => {
+// Self-healing diagnostic endpoint for the support chatbot
+app.get('/api/help/diagnose', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const email = req.user.email;
+    const lastError = await redis.get(`last_error:${userId}`) || 'No errors recorded. Your system is healthy!';
     const accounts = await redis.hgetall(`user_pages:${userId}`);
-    for (const pageId of Object.keys(accounts || {})) {
-      await redis.hdel('page_tokens', pageId);
-      await redis.del(`page_owner:${pageId}`);
+    const rules = await redis.hgetall(`post_rules:${userId}`);
+    
+    let diagnosis = "Everything looks good! If DMs aren't working, ensure your Instagram tester account is a Professional account and has accepted all invites in app settings.";
+    if (lastError.includes('Code #3')) {
+      diagnosis = "Meta API Error #3: Your app lacks capability or your token has expired. Try reconnecting your Instagram account in the dashboard.";
+    } else if (Object.keys(accounts || {}).length === 0) {
+      diagnosis = "No Instagram account linked. Please click 'Connect Instagram Account' above.";
+    } else if (Object.keys(rules || {}).length === 0) {
+      diagnosis = "You haven't set up any keyword rules yet! Click on a post below to add a trigger word.";
     }
-    await redis.del(`user_pages:${userId}`);
-    await redis.del(`post_rules:${userId}`);
-    await redis.del(`user:${email}`);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Delete failed' });
-  }
-});
 
-// Debug endpoint to inspect Redis state
-app.get('/api/debug/status', async (req, res) => {
-  try {
-    const fallbackUser = await redis.get('fallback_user_id');
-    const rules = fallbackUser ? await redis.hgetall(`post_rules:${fallbackUser}`) : {};
-    const tokens = await redis.hgetall('page_tokens');
-    res.json({ fallbackUser, rules, tokenKeys: Object.keys(tokens || {}) });
+    res.json({ diagnosis, lastError, connectedAccountsCount: Object.keys(accounts || {}).length });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Diagnosis failed' });
   }
 });
 
@@ -232,7 +237,7 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', async (req, res) => {
-  console.log('📬 RAW WEBHOOK HIT! Full Payload:', JSON.stringify(req.body));
+  console.log('📬 RAW WEBHOOK HIT!');
   if (req.body.object === 'instagram' || req.body.object === 'page') {
     await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
     return res.status(200).send('EVENT_RECEIVED');
@@ -259,7 +264,6 @@ async function startBackgroundWorker() {
         if (entry.messaging) {
           for (const msg of entry.messaging) {
             if (msg.message?.text) {
-              console.log(`📩 DM Received: "${msg.message.text}" from ${msg.sender.id}`);
               await processAutomation(igAccountId, msg.sender.id, msg.message.text, 'DM');
             }
           }
@@ -271,7 +275,6 @@ async function startBackgroundWorker() {
               const senderId = change.value.from?.id;
               const mediaId = change.value.media?.id || change.value.post_id;
               if (text) {
-                console.log(`💬 Comment/Feed Received: "${text}" from ${senderId} on media ${mediaId}`);
                 await processAutomation(igAccountId, senderId, text, 'COMMENT', mediaId);
               }
             }
@@ -286,39 +289,25 @@ async function processAutomation(igAccountId, targetId, text, type, mediaId = nu
   let userId = await redis.get(`page_owner:${igAccountId}`);
   let pageToken = await redis.hget('page_tokens', igAccountId);
 
-  // Fallback for Test Tool (ID 0) or unmapped IDs
   if (!userId || !pageToken) {
-    console.log(`⚠️ Mapping not found for ${igAccountId}. Using fallback active user...`);
     userId = await redis.get('fallback_user_id');
     pageToken = await redis.get('fallback_token');
   }
 
-  if (!userId || !pageToken) {
-    console.error(`❌ Complete failure: No user or token found for automation.`);
-    return;
-  }
+  if (!userId || !pageToken) return;
 
   const rules = await redis.hgetall(`post_rules:${userId}`);
-  if (!rules || Object.keys(rules).length === 0) {
-    console.error(`❌ No automation rules found for user ${userId}. Please create a rule in the dashboard!`);
-    return;
-  }
+  if (!rules) return;
 
   const input = text.toUpperCase().trim();
-  console.log(`🔎 Checking ${Object.keys(rules).length} rules for user ${userId}...`);
-
   for (const [id, data] of Object.entries(rules)) {
     const rule = typeof data === 'string' ? JSON.parse(data) : data;
     
-    // For comments, check mediaId match if it's not a test event
     if (type === 'COMMENT' && mediaId && rule.mediaId && rule.mediaId !== mediaId && igAccountId !== "0") {
-        console.log(`   - Skipping rule for media ${rule.mediaId} (event was on ${mediaId})`);
-        continue;
+      continue;
     }
 
     const trigger = rule.keyword?.toUpperCase().trim() || 'ANY';
-    console.log(`   - Comparing "${input}" to trigger "${trigger}"`);
-
     if (trigger === 'ANY' || input === trigger || input.includes(trigger)) {
       console.log(`🎯 Match found! Sending reply to ${targetId}`);
       const res = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
@@ -327,12 +316,15 @@ async function processAutomation(igAccountId, targetId, text, type, mediaId = nu
         body: JSON.stringify({ recipient: { id: targetId }, message: { text: rule.responseText } })
       });
       const result = await res.json();
-      if (result.error) console.error('❌ Meta API Error:', result.error.message);
-      else console.log(`✅ ${type} Sent successfully!`);
+      if (result.error) {
+        console.error('❌ Meta API Error:', result.error.message);
+        if (userId) await redis.set(`last_error:${userId}`, `Code #${result.error.code}: ${result.error.message}`);
+      } else {
+        console.log(`✅ ${type} Sent successfully!`);
+      }
       return;
     }
   }
-  console.log('⚠️ No matching keyword found in any rules.');
 }
 
 app.listen(PORT, () => {
