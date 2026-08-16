@@ -1,248 +1,448 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cloudflow | Instagram Automation</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-  <style>
-    :root { color-scheme: dark; }
-    body { background:#0b1020; color:#eef2ff; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    .glass { background:rgba(20,29,52,.78); backdrop-filter:blur(18px); border:1px solid rgba(148,163,184,.16); }
-    .soft-card { background:linear-gradient(145deg,rgba(30,41,70,.92),rgba(15,23,42,.88)); border:1px solid rgba(148,163,184,.14); }
-    .btn-primary { background:linear-gradient(135deg,#8b5cf6,#d946ef); transition:.2s ease; }
-    .btn-primary:hover { transform:translateY(-1px); box-shadow:0 10px 30px rgba(168,85,247,.28); }
-    .btn-secondary { background:#24304a; border:1px solid rgba(148,163,184,.18); }
-    .btn-secondary:hover { background:#303d5d; }
-    .danger-btn { background:#7f1d1d; border:1px solid #ef4444; }
-    .danger-btn:hover { background:#991b1b; }
-    .field { width:100%; background:#111a30; border:1px solid #334155; border-radius:.85rem; padding:.75rem 1rem; outline:none; }
-    .field:focus { border-color:#a855f7; box-shadow:0 0 0 3px rgba(168,85,247,.12); }
-    .modal-backdrop { background:rgba(2,6,23,.82); }
-    .hidden { display:none !important; }
-    .animate-in { animation:fadeIn .25s ease-out; }
-    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-    .glow { box-shadow:0 0 70px rgba(139,92,246,.13); }
-  </style>
-</head>
-<body class="min-h-screen flex flex-col">
-  <nav class="glass sticky top-0 z-40 px-5 sm:px-8 py-4 flex items-center justify-between">
-    <a href="/" class="flex items-center gap-3">
-      <span class="w-10 h-10 rounded-xl btn-primary flex items-center justify-center"><i class="fa-solid fa-bolt text-lg"></i></span>
-      <span class="text-xl sm:text-2xl font-bold tracking-tight">Cloudflow</span>
-      <span class="hidden sm:inline text-xs text-purple-300 border border-purple-400/30 rounded-full px-2 py-1">Founder Preview</span>
-    </a>
-    <div id="user-section" class="hidden items-center gap-3">
-      <span id="user-email" class="hidden md:inline text-sm text-slate-400"></span>
-      <button onclick="openSettings()" class="btn-secondary rounded-lg px-3 py-2 text-sm"><i class="fa-solid fa-sliders mr-2"></i>Settings</button>
-      <button onclick="logout()" class="text-sm text-slate-400 hover:text-white">Logout</button>
-    </div>
-  </nav>
+require('dotenv').config();
+const express = require('express');
+const path = require('path');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { Redis } = require('@upstash/redis');
 
-  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">
-    <section id="auth-section" class="max-w-md mx-auto mt-12 sm:mt-20 animate-in">
-      <div class="soft-card rounded-3xl p-7 sm:p-9 glow">
-        <div class="text-center mb-7">
-          <p class="text-purple-300 text-sm font-semibold mb-2">INSTAGRAM AUTOMATION, SIMPLIFIED</p>
-          <h1 class="text-3xl font-bold">Welcome to Cloudflow</h1>
-          <p class="text-slate-400 mt-3">Build reliable comment-to-DM automations from one workspace.</p>
-        </div>
-        <div id="auth-form" class="space-y-4">
-          <input id="auth-email" type="email" autocomplete="email" placeholder="Email address" class="field">
-          <input id="auth-password" type="password" autocomplete="current-password" placeholder="Password (8+ characters)" class="field">
-          <button onclick="handleAuth('login')" class="w-full btn-primary rounded-xl py-3 font-semibold">Sign in</button>
-          <button onclick="handleAuth('signup')" class="w-full btn-secondary rounded-xl py-3 font-semibold">Create account</button>
-          <p id="auth-message" class="text-sm text-center text-slate-400 min-h-5"></p>
-        </div>
-        <div id="twofa-login" class="hidden space-y-4 animate-in">
-          <div class="rounded-2xl bg-purple-500/10 border border-purple-400/20 p-4 text-sm text-slate-300">
-            <i class="fa-solid fa-shield-halved text-purple-300 mr-2"></i>Two-factor authentication is enabled. Enter the six-digit code from your authenticator app.
-          </div>
-          <input id="login-2fa-code" inputmode="numeric" maxlength="6" placeholder="123456" class="field text-center tracking-[.4em]">
-          <button onclick="complete2faLogin()" class="w-full btn-primary rounded-xl py-3 font-semibold">Verify and continue</button>
-          <button onclick="cancel2faLogin()" class="w-full text-sm text-slate-400 hover:text-white">Back to sign in</button>
-          <p id="twofa-message" class="text-sm text-center text-slate-400 min-h-5"></p>
-        </div>
-      </div>
-    </section>
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-    <section id="dashboard-section" class="hidden space-y-8 animate-in">
-      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
-        <div>
-          <p class="text-purple-300 text-sm font-semibold tracking-wide">AUTOMATION WORKSPACE</p>
-          <h1 class="text-3xl sm:text-4xl font-bold mt-1">Turn comments into conversations.</h1>
-          <p class="text-slate-400 mt-2 max-w-2xl">Connect an Instagram professional account, choose a post, and define the message Cloudflow sends when the keyword is detected.</p>
-        </div>
-        <div class="flex items-center gap-3">
-          <span class="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-400/20 rounded-full px-3 py-2"><i class="fa-solid fa-circle-check mr-1"></i>Workspace ready</span>
-          <button onclick="openSettings()" class="btn-secondary rounded-xl px-4 py-2.5 text-sm"><i class="fa-solid fa-gear mr-2"></i>Account</button>
-        </div>
-      </div>
+// --- SERVICE CLIENTS ---
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
-      <div class="glass rounded-3xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div class="flex gap-4 items-start">
-          <div class="w-12 h-12 rounded-2xl bg-pink-500/15 text-pink-300 flex items-center justify-center shrink-0"><i class="fa-brands fa-instagram text-2xl"></i></div>
-          <div><h2 class="text-xl font-semibold">Connect your brand</h2><p class="text-slate-400 mt-1">Link your Instagram Business or Creator account to load posts and activate automations.</p></div>
-        </div>
-        <button onclick="connectMeta()" class="btn-primary rounded-xl px-6 py-3.5 font-semibold whitespace-nowrap"><i class="fa-brands fa-facebook mr-2"></i>Connect Instagram</button>
-      </div>
+const PORT = process.env.PORT || 10000;
+const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'my_secret_token_123');
+const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
 
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div class="soft-card rounded-2xl p-5"><p class="text-slate-400 text-sm">Connected accounts</p><p id="stat-accounts" class="text-2xl font-bold mt-2">0</p><p class="text-xs text-slate-500 mt-1">Instagram profiles</p></div>
-        <div class="soft-card rounded-2xl p-5"><p class="text-slate-400 text-sm">Active rules</p><p id="stat-rules" class="text-2xl font-bold mt-2">0</p><p class="text-xs text-slate-500 mt-1">Keyword automations</p></div>
-        <div class="soft-card rounded-2xl p-5"><p class="text-slate-400 text-sm">Plan</p><p class="text-2xl font-bold mt-2">Preview</p><p class="text-xs text-purple-300 mt-1">Billing after verification</p></div>
-        <div class="soft-card rounded-2xl p-5"><p class="text-slate-400 text-sm">Security</p><p id="stat-security" class="text-2xl font-bold mt-2">Basic</p><p class="text-xs text-slate-500 mt-1">Enable 2FA in Settings</p></div>
-      </div>
+console.log(`🔑 Configured Meta App ID: ${process.env.META_APP_ID || 'MISSING'}`);
 
-      <div class="grid lg:grid-cols-3 gap-7">
-        <div class="lg:col-span-1 space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-lg font-semibold"><i class="fa-solid fa-layer-group text-purple-300 mr-2"></i>Select account</h2>
-            <button onclick="loadAccounts()" class="text-xs text-purple-400 hover:text-white transition"><i class="fa-solid fa-rotate mr-1"></i>Refresh</button>
-          </div>
-          <div class="glass rounded-2xl p-5">
-            <select id="account-select" onchange="loadPosts()" class="field"><option value="">-- Choose connected account --</option></select>
-            <div id="account-empty" class="text-sm text-slate-500 mt-4">No account is connected yet. Use the button above to begin.</div>
-          </div>
-          <div class="soft-card rounded-2xl p-5">
-            <div class="flex items-center justify-between"><h3 class="font-semibold">Premium roadmap</h3><i class="fa-solid fa-sparkles text-amber-300"></i></div>
-            <div class="space-y-3 mt-4 text-sm text-slate-300">
-              <p><i class="fa-solid fa-check text-emerald-300 mr-2"></i>Keyword automations</p>
-              <p><i class="fa-solid fa-check text-emerald-300 mr-2"></i>Diagnostics and human support</p>
-              <p><i class="fa-solid fa-clock text-amber-300 mr-2"></i>Analytics and billing coming next</p>
-            </div>
-            <button onclick="showToast('Payments can be added after Meta verification without changing your automation data.')" class="w-full btn-secondary rounded-xl py-2.5 mt-5 text-sm">View planned upgrades</button>
-          </div>
-        </div>
+// --- MIDDLEWARE ---
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  let token = authHeader && authHeader.split(' ')[1];
+  if (!token && req.query.token) token = req.query.token;
+  if (!token) return res.status(401).json({ error: 'Access denied.' });
 
-        <div class="lg:col-span-2 space-y-4">
-          <div class="flex items-center justify-between"><h2 class="text-lg font-semibold"><i class="fa-solid fa-images text-purple-300 mr-2"></i>Choose a post</h2><span class="text-xs text-slate-500">Click a post to create a rule</span></div>
-          <div id="posts-grid" class="grid grid-cols-2 sm:grid-cols-3 gap-4 min-h-[260px] glass rounded-2xl p-5">
-            <div class="col-span-full flex items-center justify-center text-slate-500 py-16">Select a connected account to load posts.</div>
-          </div>
-        </div>
-      </div>
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Session expired.' });
+    if (user.pending2fa) return res.status(403).json({ error: 'Two-factor verification required.' });
+    req.user = user;
+    next();
+  });
+}
 
-      <div class="space-y-4">
-        <div class="flex items-center justify-between"><h2 class="text-lg font-semibold"><i class="fa-solid fa-robot text-purple-300 mr-2"></i>Active automations</h2><span id="rules-count-label" class="text-xs text-slate-500"></span></div>
-        <div id="rules-list" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
-      </div>
-    </section>
-  </main>
+function issueSession(user) {
+  return jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+}
 
-  <footer class="glass mt-10 py-7 text-center text-slate-500 text-sm">
-    <div class="flex justify-center gap-6 mb-3"><a href="/privacy.html" class="hover:text-purple-300">Privacy Policy</a><a href="/terms.html" class="hover:text-purple-300">Terms of Service</a></div>
-    <p>© 2026 Cloudflow Automation · Founder Preview</p>
-  </footer>
+function base32Decode(value) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = String(value || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
+  let bits = '';
+  for (const char of clean) {
+    const index = alphabet.indexOf(char);
+    if (index < 0) continue;
+    bits += index.toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(bytes);
+}
 
-  <!-- Chatbot Floating Button (Higher Position) -->
-  <div class="fixed bottom-12 right-6 z-[60]">
-    <button onclick="toggleChatbot()" class="w-16 h-16 btn-primary rounded-full shadow-2xl flex items-center justify-center text-2xl hover:scale-110 transition shadow-[0_0_20px_rgba(139,92,246,0.5)]"><i class="fa-solid fa-comment-dots"></i></button>
-    <div id="chatbot-window" class="hidden absolute bottom-20 right-0 w-[min(22rem,calc(100vw-2rem))] glass rounded-2xl shadow-2xl overflow-hidden border border-purple-500/30">
-      <div class="btn-primary p-4 flex items-center justify-between"><span class="font-semibold"><i class="fa-solid fa-stethoscope mr-2"></i>Cloudflow Support</span><button onclick="toggleChatbot()"><i class="fa-solid fa-xmark"></i></button></div>
-      <div id="chat-content" class="p-4 h-64 overflow-y-auto space-y-3 text-sm bg-slate-950/35"><div class="bg-slate-800 p-3 rounded-xl">Run a system scan to check your connection, rules, and most recent Meta error.</div></div>
-      <div class="p-3 border-t border-slate-700 flex gap-2"><button onclick="runDiagnosis()" class="flex-1 btn-primary py-2 rounded-lg text-xs font-bold uppercase tracking-wider">Run system scan</button><a href="mailto:support@cloudflow.com?subject=Cloudflow%20support" class="btn-secondary px-3 py-2 rounded-lg text-xs">HUMAN</a></div>
-    </div>
-  </div>
+function totpCode(secret, timestamp = Date.now()) {
+  const counter = Math.floor(timestamp / 30000);
+  const counterBuffer = Buffer.alloc(8);
+  counterBuffer.writeBigUInt64BE(BigInt(counter));
+  const digest = crypto.createHmac('sha1', base32Decode(secret)).update(counterBuffer).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  const binary = ((digest[offset] & 0x7f) << 24) | (digest[offset + 1] << 16) | (digest[offset + 2] << 8) | digest[offset + 3];
+  return String(binary % 1000000).padStart(6, '0');
+}
 
-  <div id="rule-modal" class="hidden fixed inset-0 z-50 modal-backdrop items-center justify-center p-4">
-    <div class="glass rounded-3xl max-w-md w-full p-7 space-y-5 animate-in">
-      <div class="flex justify-between items-center"><h2 class="text-2xl font-bold">Create automation</h2><button onclick="closeModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button></div>
-      <div id="modal-preview" class="w-full aspect-video rounded-2xl overflow-hidden bg-slate-900"></div>
-      <input id="modal-keyword" type="text" placeholder="Trigger keyword, e.g. LINK" class="field">
-      <textarea id="modal-response" rows="4" placeholder="Message Cloudflow should send…" class="field"></textarea>
-      <div class="flex gap-3"><button onclick="closeModal()" class="flex-1 btn-secondary rounded-xl py-3">Cancel</button><button onclick="saveRule()" class="flex-1 btn-primary rounded-xl py-3 font-semibold">Save rule</button></div>
-    </div>
-  </div>
+function verifyTotp(secret, code) {
+  const normalized = String(code || '').replace(/\s/g, '');
+  if (!/^\d{6}$/.test(normalized)) return false;
+  for (const drift of [-30000, 0, 30000]) {
+    if (totpCode(secret, Date.now() + drift) === normalized) return true;
+  }
+  return false;
+}
 
-  <div id="settings-modal" class="hidden fixed inset-0 z-50 modal-backdrop items-center justify-center p-4">
-    <div class="glass rounded-3xl max-w-lg w-full p-7 space-y-6 animate-in max-h-[90vh] overflow-y-auto">
-      <div class="flex justify-between items-center"><div><p class="text-purple-300 text-xs font-semibold">ACCOUNT CONTROL CENTER</p><h2 class="text-2xl font-bold mt-1">Settings</h2></div><button onclick="closeSettings()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button></div>
-      <div class="soft-card rounded-2xl p-4"><p class="text-sm text-slate-400">Signed in as</p><p id="settings-email" class="font-semibold mt-1"></p></div>
-      <div class="space-y-3"><h3 class="font-semibold"><i class="fa-solid fa-key text-purple-300 mr-2"></i>Update password</h3><input id="new-password" type="password" placeholder="New password (8+ characters)" class="field"><button onclick="updatePassword()" class="btn-secondary rounded-xl px-4 py-2.5 text-sm">Save password</button><p id="password-message" class="text-xs text-slate-400"></p></div>
-      <div class="border-t border-slate-700 pt-5 space-y-3"><div class="flex items-center justify-between"><h3 class="font-semibold"><i class="fa-solid fa-shield-halved text-emerald-300 mr-2"></i>Two-factor authentication</h3><span id="tfa-status" class="text-xs text-slate-400"></span></div><p class="text-sm text-slate-400">Use an authenticator app such as Google Authenticator, Microsoft Authenticator, or 1Password.</p><button id="start-2fa-btn" onclick="start2FA()" class="btn-secondary rounded-xl px-4 py-2.5 text-sm">Set up 2FA</button><div id="tfa-setup" class="hidden soft-card rounded-2xl p-4 space-y-3"><p class="text-xs text-slate-400">Add this secret to your authenticator app:</p><code id="tfa-secret" class="block bg-slate-950 rounded-lg p-3 text-amber-300 break-all tracking-wider"></code><p class="text-xs text-slate-500">If your app supports it, use this URI:</p><code id="tfa-uri" class="block bg-slate-950 rounded-lg p-3 text-xs text-slate-300 break-all"></code><input id="tfa-code" inputmode="numeric" maxlength="6" placeholder="Enter the current 6-digit code" class="field text-center tracking-[.35em]"><button onclick="verify2FA()" class="btn-primary rounded-xl px-4 py-2.5 text-sm font-semibold">Verify and enable</button></div><div id="tfa-disable" class="hidden flex gap-2"><input id="disable-tfa-code" inputmode="numeric" maxlength="6" placeholder="6-digit code" class="field"><button onclick="disable2FA()" class="danger-btn rounded-xl px-4 py-2 text-sm whitespace-nowrap">Disable</button></div><p id="tfa-message" class="text-xs text-slate-400"></p></div>
-      <div class="border-t border-slate-700 pt-5"><h3 class="font-semibold text-red-300"><i class="fa-solid fa-triangle-exclamation mr-2"></i>Danger zone</h3><p class="text-sm text-slate-400 mt-2">Deleting your Cloudflow account removes your login, rules, saved connection metadata, and stored tokens from Cloudflow. It does not delete your Facebook Page or Instagram account.</p><button onclick="deleteAccount()" class="danger-btn rounded-xl px-4 py-2.5 mt-4 text-sm font-semibold">Delete my Cloudflow account</button></div>
-    </div>
-  </div>
+function makeTotpSecret() {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const bytes = crypto.randomBytes(20);
+  let bits = '';
+  for (const byte of bytes) bits += byte.toString(2).padStart(8, '0');
+  let secret = '';
+  for (let i = 0; i + 5 <= bits.length; i += 5) secret += alphabet[parseInt(bits.slice(i, i + 5), 2)];
+  return secret;
+}
 
-  <div id="toast" class="hidden fixed top-20 right-5 z-[70] max-w-sm rounded-xl px-4 py-3 glass text-sm shadow-xl"></div>
+async function deleteUserResources(userId, email) {
+  const accounts = await redis.hgetall(`user_pages:${userId}`);
+  const ownedIds = new Set(Object.keys(accounts || {}));
+  const pageTokens = await redis.hgetall('page_tokens');
+  for (const id of Object.keys(pageTokens || {})) {
+    if (await redis.get(`page_owner:${id}`) === userId) ownedIds.add(id);
+  }
+  for (const id of ownedIds) {
+    await redis.hdel('page_tokens', id);
+    await redis.del(`page_owner:${id}`);
+  }
+  if (await redis.get('fallback_user_id') === userId) {
+    await redis.del('fallback_user_id');
+    await redis.del('fallback_token');
+  }
+  await redis.del(`user_pages:${userId}`);
+  await redis.del(`post_rules:${userId}`);
+  await redis.del(`last_error:${userId}`);
+  await redis.del(`user:${email}`);
+  await redis.del(`userid:${userId}`);
+}
 
-<script>
-  let currentToken = localStorage.getItem('token');
-  let pending2faToken = null;
-  let selectedMedia = null;
+// -------------------------------------------------------------
+// 0. ADMIN & DIAGNOSTICS
+// -------------------------------------------------------------
+app.get('/api/admin/master-reset', async (req, res) => {
+  try {
+    await redis.flushall();
+    console.log('🧹 MASTER RESET: Redis database wiped successfully.');
+    res.send('<h1>✅ Database Wiped Successfully! You can now reconnect your account.</h1>');
+  } catch (err) {
+    res.status(500).send('<h1>❌ Wipe Failed: ' + err.message + '</h1>');
+  }
+});
 
-  const $ = id => document.getElementById(id);
-  function showToast(message, error = false) { const el = $('toast'); el.textContent = message; el.className = `fixed top-20 right-5 z-[70] max-w-sm rounded-xl px-4 py-3 glass text-sm shadow-xl ${error ? 'border border-red-400/40 text-red-200' : 'border border-emerald-400/30 text-emerald-200'}`; setTimeout(() => el.classList.add('hidden'), 4200); }
-  async function jsonFetch(url, options = {}) { const response = await fetch(url, options); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'Request failed'); return data; }
+app.get('/api/debug/status', async (req, res) => {
+  try {
+    const fallbackUser = await redis.get('fallback_user_id');
+    const rules = fallbackUser ? await redis.hgetall(`post_rules:${fallbackUser}`) : {};
+    const tokens = await redis.hgetall('page_tokens');
+    res.json({ 
+      status: 'Online',
+      appId: process.env.META_APP_ID,
+      fallbackUser, 
+      rulesCount: Object.keys(rules || {}).length, 
+      tokenKeys: Object.keys(tokens || {}) 
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-  async function handleAuth(type) {
-    const email = $('auth-email').value.trim(); const password = $('auth-password').value;
-    if (!email || password.length < 8) { $('auth-message').textContent = 'Enter a valid email and a password of at least 8 characters.'; return; }
-    $('auth-message').textContent = 'Please wait…';
+app.get('/api/help/diagnose', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const lastError = await redis.get(`last_error:${userId}`) || 'No errors recorded.';
+    const accounts = await redis.hgetall(`user_pages:${userId}`);
+    const rules = await redis.hgetall(`post_rules:${userId}`);
+    
+    let diagnosis = "Everything looks healthy! If DMs aren't working, check your tester account settings.";
+    if (lastError.includes('Code #3')) {
+      diagnosis = "Meta Error #3: Capability issue. Ensure 'instagram_manage_messages' has Standard Access and try reconnecting.";
+    } else if (lastError.includes('refused to list your pages')) {
+      diagnosis = "Meta is blocking your page list. This usually means 'business_management' or 'pages_show_list' permissions are missing in your Meta Dashboard.";
+    } else if (Object.keys(accounts || {}).length === 0) {
+      diagnosis = "No Instagram account linked. Please click 'Connect Instagram' and ensure you check ALL boxes in the Facebook popup.";
+    }
+
+    res.json({ diagnosis, lastError, connectedAccountsCount: Object.keys(accounts || {}).length });
+  } catch (err) {
+    res.status(500).json({ error: 'Diagnosis failed' });
+  }
+});
+
+// -------------------------------------------------------------
+// 1. AUTHENTICATION & ACCOUNT MANAGEMENT
+// -------------------------------------------------------------
+app.post('/api/signup', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const existing = await redis.get(`user:${email}`);
+    if (existing) return res.status(400).json({ error: 'User already exists' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = Date.now().toString();
+    const userData = { id: userId, email, password: hashedPassword, tfaEnabled: false };
+    await redis.set(`user:${email}`, JSON.stringify(userData));
+    await redis.set(`userid:${userId}`, email);
+
+    const token = jwt.sign({ id: userId, email }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, user: { id: userId, email, tfaEnabled: false } });
+  } catch (err) { res.status(500).json({ error: 'Signup failed' }); }
+});
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const userData = await redis.get(`user:${email}`);
+    if (!userData) return res.status(401).json({ error: 'Invalid credentials' });
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (!(await bcrypt.compare(password, user.password))) return res.status(401).json({ error: 'Invalid credentials' });
+
+    if (user.tfaEnabled && user.tfaSecret) {
+      const pendingToken = jwt.sign({ id: user.id, email: user.email, pending2fa: true }, JWT_SECRET, { expiresIn: '10m' });
+      return res.json({ requires2fa: true, pendingToken, user: { id: user.id, email: user.email, tfaEnabled: true } });
+    }
+
+    const token = issueSession(user);
+    res.json({ token, user: { id: user.id, email: user.email, tfaEnabled: false } });
+  } catch (err) { res.status(500).json({ error: 'Login failed' }); }
+});
+
+app.post('/api/login/2fa', async (req, res) => {
+  try {
+    const { pendingToken, code } = req.body;
+    const pending = jwt.verify(pendingToken, JWT_SECRET);
+    if (!pending.pending2fa) return res.status(400).json({ error: 'Invalid 2FA session.' });
+    const userData = await redis.get(`user:${pending.email}`);
+    if (!userData) return res.status(401).json({ error: 'Invalid credentials' });
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (!user.tfaEnabled || !verifyTotp(user.tfaSecret, code)) return res.status(401).json({ error: 'Invalid authenticator code.' });
+    const token = issueSession(user);
+    res.json({ token, user: { id: user.id, email: user.email, tfaEnabled: true } });
+  } catch (err) { res.status(401).json({ error: '2FA verification failed.' }); }
+});
+
+app.get('/api/user/settings', authenticateToken, async (req, res) => {
+  const userData = await redis.get(`user:${req.user.email}`);
+  const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+  res.json({ user: { id: user.id, email: user.email, tfaEnabled: Boolean(user.tfaEnabled) } });
+});
+
+app.post('/api/user/2fa/setup', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const userData = await redis.get(`user:${email}`);
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    const secret = makeTotpSecret();
+    user.tfaSetupSecret = secret;
+    await redis.set(`user:${email}`, JSON.stringify(user));
+    const issuer = 'Cloudflow';
+    const label = `${issuer}:${encodeURIComponent(email)}`;
+    const otpauthUri = `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
+    res.json({ secret, otpauthUri });
+  } catch (err) { res.status(500).json({ error: '2FA setup failed' }); }
+});
+
+app.post('/api/user/2fa/verify', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const userData = await redis.get(`user:${email}`);
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (!user.tfaSetupSecret || !verifyTotp(user.tfaSetupSecret, req.body.code)) return res.status(400).json({ error: 'Invalid authenticator code.' });
+    user.tfaSecret = user.tfaSetupSecret;
+    delete user.tfaSetupSecret;
+    user.tfaEnabled = true;
+    await redis.set(`user:${email}`, JSON.stringify(user));
+    res.json({ success: true, tfaEnabled: true });
+  } catch (err) { res.status(500).json({ error: '2FA verification failed' }); }
+});
+
+app.post('/api/user/2fa/disable', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const userData = await redis.get(`user:${email}`);
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (user.tfaEnabled && !verifyTotp(user.tfaSecret, req.body.code)) return res.status(400).json({ error: 'Valid authenticator code required.' });
+    delete user.tfaSecret;
+    delete user.tfaSetupSecret;
+    user.tfaEnabled = false;
+    await redis.set(`user:${email}`, JSON.stringify(user));
+    res.json({ success: true, tfaEnabled: false });
+  } catch (err) { res.status(500).json({ error: '2FA disable failed' }); }
+});
+
+app.post('/api/user/settings', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const { newPassword } = req.body;
+    const userData = await redis.get(`user:${email}`);
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (newPassword) {
+      if (String(newPassword).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+      user.password = await bcrypt.hash(newPassword, 12);
+    }
+    await redis.set(`user:${email}`, JSON.stringify(user));
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Settings update failed' }); }
+});
+
+app.delete('/api/user/account', authenticateToken, async (req, res) => {
+  try {
+    await deleteUserResources(req.user.id, req.user.email);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Account deletion failed:', err);
+    res.status(500).json({ error: 'Account deletion failed' });
+  }
+});
+
+// -------------------------------------------------------------
+// 2. OAUTH & ACCOUNT CONNECTION
+// -------------------------------------------------------------
+app.get('/api/auth/instagram', (req, res) => {
+  const { token } = req.query;
+  const decoded = jwt.verify(token, JWT_SECRET);
+  const state = Buffer.from(JSON.stringify({ userId: decoded.id, token })).toString('base64');
+  const appId = process.env.META_APP_ID;
+  const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
+  const scope = ['instagram_basic','instagram_manage_comments','instagram_manage_messages','pages_show_list','pages_read_engagement','pages_manage_metadata','business_management'].join(',');
+  res.redirect(`https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`);
+});
+
+app.get('/api/auth/instagram/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    const { userId, token: userJwtToken } = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+    const appId = process.env.META_APP_ID;
+    const appSecret = process.env.META_APP_SECRET;
+    const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
+
+    const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`);
+    const tokenData = await tokenRes.json();
+    const userToken = tokenData.access_token;
+
+    const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${userToken}`);
+    const pagesData = await pagesRes.json();
+
+    if (pagesData.error) {
+      console.error(`❌ Meta API Error (Pages): ${JSON.stringify(pagesData.error)}`);
+      await redis.set(`last_error:${userId}`, `Meta refused to list your pages: ${pagesData.error.message}`);
+    }
+
+    console.log(`📄 Pages Found by Meta: ${pagesData.data?.length || 0}`);
+
+    if (pagesData.data) {
+      for (const page of pagesData.data) {
+        const igRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account&access_token=${page.access_token}`);
+        const igData = await igRes.json();
+        const igId = igData.instagram_business_account?.id;
+
+        await redis.hset('page_tokens', { [page.id]: page.access_token });
+        await redis.hset(`user_pages:${userId}`, { [page.id]: page.name });
+        await redis.set(`page_owner:${page.id}`, userId);
+
+        if (igId) {
+          await redis.hset('page_tokens', { [igId]: page.access_token });
+          await redis.set(`page_owner:${igId}`, userId);
+          console.log(`🔗 Linked IG ID: ${igId}`);
+        }
+        
+        await redis.set('fallback_user_id', userId);
+        await redis.set('fallback_token', page.access_token);
+        await fetch(`https://graph.facebook.com/v19.0/${page.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${page.access_token}`, { method: 'POST' });
+      }
+    }
+    res.redirect(`/?meta_connect=success&token=${userJwtToken}`);
+  } catch (err) {
+    console.error('OAuth Error:', err);
+    res.redirect('/?error=oauth_failed');
+  }
+});
+
+// -------------------------------------------------------------
+// 3. DATA API & RULE MANAGEMENT
+// -------------------------------------------------------------
+app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
+  const accountsMap = await redis.hgetall(`user_pages:${req.user.id}`);
+  res.json({ accounts: Object.entries(accountsMap || {}).map(([pageId, name]) => ({ pageId, name })) });
+});
+
+app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
+  const { pageId } = req.query;
+  const token = await redis.hget('page_tokens', pageId);
+  const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${token}`);
+  const igData = await igRes.json();
+  const igId = igData.instagram_business_account?.id;
+  if (!igId) return res.json({ posts: [] });
+  const postsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/media?fields=id,caption,media_url,media_type,thumbnail_url&access_token=${token}`);
+  const postsData = await postsRes.json();
+  res.json({ posts: postsData.data || [] });
+});
+
+app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+  const rules = await redis.hgetall(`post_rules:${req.user.id}`);
+  const parsed = {};
+  for (const [k, v] of Object.entries(rules || {})) parsed[k] = JSON.parse(v);
+  res.json({ postRules: parsed });
+});
+
+app.post('/api/rules/post', authenticateToken, async (req, res) => {
+  const { mediaId, keyword, responseText, caption, thumbnail } = req.body;
+  await redis.hset(`post_rules:${req.user.id}`, { [mediaId]: JSON.stringify({ keyword, responseText, caption, thumbnail, mediaId }) });
+  res.json({ success: true });
+});
+
+app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const mediaId = req.params.mediaId;
+    await redis.hdel(`post_rules:${userId}`, mediaId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete rule' });
+  }
+});
+
+// -------------------------------------------------------------
+// 4. WEBHOOKS & WORKER
+// -------------------------------------------------------------
+app.get('/webhook', (req, res) => {
+  if (req.query['hub.verify_token'] === VERIFY_TOKEN) res.status(200).send(req.query['hub.challenge']);
+  else res.sendStatus(403);
+});
+
+app.post('/webhook', async (req, res) => {
+  console.log('📬 WEBHOOK HIT!');
+  await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
+  res.status(200).send('EVENT_RECEIVED');
+});
+
+async function worker() {
+  console.log('👷 Worker Active...');
+  while (true) {
     try {
-      const data = await jsonFetch(`/api/${type}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ email, password }) });
-      if (data.requires2fa) { pending2faToken = data.pendingToken; $('auth-form').classList.add('hidden'); $('twofa-login').classList.remove('hidden'); $('twofa-message').textContent = 'Enter your authenticator code.'; return; }
-      completeSession(data);
-    } catch (err) { $('auth-message').textContent = err.message; }
-  }
-  async function complete2faLogin() {
-    const code = $('login-2fa-code').value.trim();
-    try { completeSession(await jsonFetch('/api/login/2fa', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ pendingToken:pending2faToken, code }) })); } catch (err) { $('twofa-message').textContent = err.message; }
-  }
-  function cancel2faLogin() { pending2faToken = null; $('twofa-login').classList.add('hidden'); $('auth-form').classList.remove('hidden'); $('twofa-message').textContent = ''; }
-  function completeSession(data) { currentToken = data.token; localStorage.setItem('token', currentToken); localStorage.setItem('user', JSON.stringify(data.user || {})); initDashboard(); }
-  function logout() { localStorage.clear(); location.reload(); }
+      const raw = await redis.rpop('meta_webhook_queue');
+      if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
+      const payload = JSON.parse(raw);
+      for (const entry of payload.entry || []) {
+        const igId = entry.id;
+        const userId = await redis.get(`page_owner:${igId}`) || await redis.get('fallback_user_id');
+        const token = await redis.hget('page_tokens', igId) || await redis.get('fallback_token');
+        if (!userId || !token) continue;
 
-  async function initDashboard() {
-    if (!currentToken) return;
-    $('auth-section').classList.add('hidden'); $('dashboard-section').classList.remove('hidden'); $('user-section').classList.remove('hidden'); $('user-section').classList.add('flex');
-    const savedUser = JSON.parse(localStorage.getItem('user') || '{}'); $('user-email').textContent = savedUser.email || '';
-    try { await loadAccounts(); await loadRules(); await loadSettingsStatus(); } catch (err) { showToast(err.message, true); }
-  }
-  async function loadAccounts() {
-    const data = await jsonFetch('/api/instagram/accounts', { headers:{Authorization:`Bearer ${currentToken}`} });
-    const select = $('account-select'); select.innerHTML = '<option value="">-- Choose connected account --</option>';
-    data.accounts.forEach(acc => { const option = document.createElement('option'); option.value = acc.pageId; option.textContent = acc.name; select.appendChild(option); });
-    $('stat-accounts').textContent = data.accounts.length; $('account-empty').classList.toggle('hidden', data.accounts.length > 0);
-  }
-  async function loadPosts() {
-    const pageId = $('account-select').value; if (!pageId) return;
-    $('posts-grid').innerHTML = '<div class="col-span-full text-center py-16 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Loading posts…</div>';
-    try {
-      const data = await jsonFetch(`/api/instagram/posts?pageId=${encodeURIComponent(pageId)}`, { headers:{Authorization:`Bearer ${currentToken}`} });
-      if (!data.posts.length) { $('posts-grid').innerHTML = '<div class="col-span-full text-center py-16 text-slate-500">No posts returned for this account.</div>'; return; }
-      $('posts-grid').innerHTML = data.posts.map(post => { const img = post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url; return `<button type="button" onclick="openModal(${JSON.stringify(post).replace(/"/g,'&quot;')})" class="relative group aspect-square rounded-2xl overflow-hidden bg-slate-900 border border-slate-700 hover:border-purple-400 transition"><img src="${img || ''}" class="w-full h-full object-cover group-hover:scale-105 transition" alt="Instagram post"><span class="absolute inset-0 bg-purple-600/20 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"><i class="fa-solid fa-wand-magic-sparkles text-2xl"></i></span></button>`; }).join('');
-    } catch (err) { $('posts-grid').innerHTML = `<div class="col-span-full text-center py-16 text-red-300">${err.message}</div>`; }
-  }
-  async function loadRules() {
-    const data = await jsonFetch('/api/dashboard-data', { headers:{Authorization:`Bearer ${currentToken}`} }); const rules = Object.values(data.postRules || {}); $('stat-rules').textContent = rules.length; $('rules-count-label').textContent = `${rules.length} configured`; const list = $('rules-list');
-    if (!rules.length) { list.innerHTML = '<div class="sm:col-span-2 lg:col-span-3 soft-card rounded-2xl p-6 text-slate-500">No automations yet. Choose a post above to create your first keyword rule.</div>'; return; }
-    list.innerHTML = rules.map(rule => `<div class="soft-card rounded-2xl p-4"><div class="flex gap-3 items-center"><img src="${rule.thumbnail || ''}" class="w-12 h-12 rounded-xl object-cover bg-slate-900"><div class="min-w-0 flex-1"><p class="text-xs uppercase tracking-wide text-purple-300 font-bold">Trigger: ${escapeHtml(rule.keyword || '')}</p><p class="text-sm text-slate-300 truncate mt-1">${escapeHtml(rule.responseText || '')}</p></div><button onclick="deleteRule('${encodeURIComponent(rule.mediaId)}')" title="Delete rule" class="text-slate-500 hover:text-red-300"><i class="fa-solid fa-trash"></i></button></div></div>`).join('');
-  }
-  function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
-  async function deleteRule(mediaId) { if (!confirm('Delete this automation rule?')) return; try { await jsonFetch(`/api/rules/post/${mediaId}`, { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); await loadRules(); showToast('Automation deleted.'); } catch (err) { showToast(err.message, true); } }
-  function openModal(post) { selectedMedia = post; const img = post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url; $('modal-preview').innerHTML = `<img src="${img || ''}" class="w-full h-full object-cover" alt="Selected post">`; $('modal-keyword').value = ''; $('modal-response').value = ''; $('rule-modal').classList.remove('hidden'); $('rule-modal').classList.add('flex'); }
-  function closeModal() { $('rule-modal').classList.add('hidden'); $('rule-modal').classList.remove('flex'); }
-  async function saveRule() { const keyword = $('modal-keyword').value.trim(); const responseText = $('modal-response').value.trim(); if (!keyword || !responseText || !selectedMedia) { showToast('Add a keyword and response message.', true); return; } try { await jsonFetch('/api/rules/post', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({mediaId:selectedMedia.id,keyword,responseText,thumbnail:selectedMedia.media_type === 'VIDEO' ? selectedMedia.thumbnail_url : selectedMedia.media_url,caption:selectedMedia.caption}) }); closeModal(); await loadRules(); showToast('Automation saved.'); } catch (err) { showToast(err.message, true); } }
-  function connectMeta() { if (!currentToken) return showToast('Sign in first.', true); location.href = `/api/auth/instagram?token=${encodeURIComponent(currentToken)}`; }
+        const rules = await redis.hgetall(`post_rules:${userId}`);
+        const items = [...(entry.messaging || []), ...(entry.changes || [])];
+        for (const item of items) {
+          const val = item.message || item.value || item;
+          const text = (val.text || val.message || '').toUpperCase();
+          const senderId = val.from?.id || item.sender?.id;
+          if (!text || !senderId) continue;
 
-  async function loadSettingsStatus() { const data = await jsonFetch('/api/user/settings', { headers:{Authorization:`Bearer ${currentToken}`} }); const enabled = Boolean(data.user.tfaEnabled); $('settings-email').textContent = data.user.email; $('tfa-status').textContent = enabled ? 'Enabled' : 'Not enabled'; $('tfa-status').className = enabled ? 'text-xs text-emerald-300' : 'text-xs text-slate-400'; $('start-2fa-btn').classList.toggle('hidden', enabled); $('tfa-disable').classList.toggle('hidden', !enabled); $('stat-security').textContent = enabled ? '2FA on' : 'Basic'; }
-  async function openSettings() { try { await loadSettingsStatus(); $('settings-modal').classList.remove('hidden'); $('settings-modal').classList.add('flex'); } catch (err) { showToast(err.message, true); } }
-  function closeSettings() { $('settings-modal').classList.add('hidden'); $('settings-modal').classList.remove('flex'); }
-  async function updatePassword() { const value = $('new-password').value; if (value.length < 8) { $('password-message').textContent = 'Use at least 8 characters.'; return; } try { await jsonFetch('/api/user/settings', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({newPassword:value}) }); $('new-password').value = ''; $('password-message').textContent = 'Password updated successfully.'; showToast('Password updated.'); } catch (err) { $('password-message').textContent = err.message; } }
-  async function start2FA() { try { const data = await jsonFetch('/api/user/2fa/setup', { method:'POST', headers:{Authorization:`Bearer ${currentToken}`} }); $('tfa-secret').textContent = data.secret; $('tfa-uri').textContent = data.otpauthUri; $('tfa-setup').classList.remove('hidden'); $('tfa-message').textContent = 'Scan or enter the secret, then enter the current code.'; } catch (err) { $('tfa-message').textContent = err.message; } }
-  async function verify2FA() { try { await jsonFetch('/api/user/2fa/verify', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({code:$('tfa-code').value}) }); $('tfa-setup').classList.add('hidden'); $('tfa-code').value = ''; await loadSettingsStatus(); $('tfa-message').textContent = '2FA is enabled.'; showToast('Two-factor authentication enabled.'); } catch (err) { $('tfa-message').textContent = err.message; } }
-  async function disable2FA() { try { await jsonFetch('/api/user/2fa/disable', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({code:$('disable-tfa-code').value}) }); $('disable-tfa-code').value = ''; await loadSettingsStatus(); $('tfa-message').textContent = '2FA is disabled.'; showToast('Two-factor authentication disabled.'); } catch (err) { $('tfa-message').textContent = err.message; } }
-  async function deleteAccount() { if (!confirm('Delete your Cloudflow account and all saved Cloudflow data?')) return; const typed = prompt('Type DELETE to confirm permanent deletion:'); if (!typed || typed.toUpperCase() !== 'DELETE') return showToast('Deletion cancelled.', true); try { await jsonFetch('/api/user/account', { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); localStorage.clear(); alert('Your Cloudflow account was deleted.'); location.reload(); } catch (err) { showToast(err.message, true); } }
+          for (const rStr of Object.values(rules)) {
+            const rule = JSON.parse(rStr);
+            if (text.includes(rule.keyword.toUpperCase())) {
+              console.log(`🎯 MATCH! Replying to ${senderId}`);
+              const res = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ recipient: { id: senderId }, message: { text: rule.responseText } })
+              });
+              const result = await res.json();
+              if (result.error) await redis.set(`last_error:${userId}`, result.error.message);
+            }
+          }
+        }
+      }
+    } catch (err) { console.error('Worker Error:', err.message); }
+  }
+}
 
-  function toggleChatbot() { $('chatbot-window').classList.toggle('hidden'); }
-  async function runDiagnosis() { const content = $('chat-content'); content.innerHTML += '<div class="bg-purple-500/15 p-3 rounded-xl text-right">Running system scan…</div>'; try { const data = await jsonFetch('/api/help/diagnose', { headers:{Authorization:`Bearer ${currentToken}`} }); content.innerHTML += `<div class="bg-slate-800 p-3 rounded-xl"><p class="font-semibold text-purple-300 mb-1">Diagnosis complete</p><p>${escapeHtml(data.diagnosis)}</p>${data.lastError && data.lastError !== 'No errors recorded.' ? `<p class="mt-2 text-xs text-red-300">Latest server error: ${escapeHtml(data.lastError)}</p>` : ''}</div>`; content.scrollTop = content.scrollHeight; } catch (err) { content.innerHTML += `<div class="bg-red-900/20 p-3 rounded-xl text-red-200">${escapeHtml(err.message)}</div>`; } }
-
-  const params = new URLSearchParams(location.search);
-  if (params.get('meta_connect') === 'success' && params.get('token')) { localStorage.setItem('token', params.get('token')); currentToken = params.get('token'); history.replaceState({}, document.title, '/'); }
-  if (currentToken) initDashboard();
-</script>
-</body>
-</html>
+app.listen(PORT, () => { console.log(`🚀 Server on ${PORT}`); worker(); });
