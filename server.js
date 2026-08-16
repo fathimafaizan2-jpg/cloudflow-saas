@@ -307,14 +307,20 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`);
     const tokenData = await tokenRes.json();
-    const userToken = tokenData.access_token;
+    
+    if (!tokenRes.ok) {
+      console.error(`❌ Meta Token Exchange Error: ${JSON.stringify(tokenData)}`);
+      await redis.set(`last_error:${userId}`, `Token exchange failed: ${tokenData.error?.message || 'Unknown error'}`);
+      return res.redirect(`/?error=oauth_failed&msg=${encodeURIComponent(tokenData.error?.message || '')}`);
+    }
 
+    const userToken = tokenData.access_token;
     const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${userToken}`);
     const pagesData = await pagesRes.json();
 
     if (pagesData.error) {
       console.error(`❌ Meta API Error (Pages): ${JSON.stringify(pagesData.error)}`);
-      await redis.set(`last_error:${userId}`, `Meta refused to list your pages: ${pagesData.error.message}`);
+      await redis.set(`last_error:${userId}`, `Meta refused to list your pages: ${pagesData.error.message} (Error Code: ${pagesData.error.code})`);
     }
 
     console.log(`📄 Pages Found by Meta: ${pagesData.data?.length || 0}`);
