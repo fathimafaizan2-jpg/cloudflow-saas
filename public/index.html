@@ -97,7 +97,10 @@
 
       <div class="grid lg:grid-cols-3 gap-7">
         <div class="lg:col-span-1 space-y-4">
-          <h2 class="text-lg font-semibold"><i class="fa-solid fa-layer-group text-purple-300 mr-2"></i>Select account</h2>
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold"><i class="fa-solid fa-layer-group text-purple-300 mr-2"></i>Select account</h2>
+            <button onclick="loadAccounts()" class="text-xs text-purple-400 hover:text-white transition"><i class="fa-solid fa-rotate mr-1"></i>Refresh</button>
+          </div>
           <div class="glass rounded-2xl p-5">
             <select id="account-select" onchange="loadPosts()" class="field"><option value="">-- Choose connected account --</option></select>
             <div id="account-empty" class="text-sm text-slate-500 mt-4">No account is connected yet. Use the button above to begin.</div>
@@ -133,12 +136,13 @@
     <p>© 2026 Cloudflow Automation · Founder Preview</p>
   </footer>
 
-  <div class="fixed bottom-6 right-6 z-50">
-    <button onclick="toggleChatbot()" class="w-14 h-14 btn-primary rounded-full shadow-2xl flex items-center justify-center text-xl hover:scale-105 transition"><i class="fa-solid fa-comment-dots"></i></button>
-    <div id="chatbot-window" class="hidden absolute bottom-18 right-0 w-[min(22rem,calc(100vw-2rem))] glass rounded-2xl shadow-2xl overflow-hidden">
+  <!-- Chatbot Floating Button (Higher Position) -->
+  <div class="fixed bottom-12 right-6 z-[60]">
+    <button onclick="toggleChatbot()" class="w-16 h-16 btn-primary rounded-full shadow-2xl flex items-center justify-center text-2xl hover:scale-110 transition shadow-[0_0_20px_rgba(139,92,246,0.5)]"><i class="fa-solid fa-comment-dots"></i></button>
+    <div id="chatbot-window" class="hidden absolute bottom-20 right-0 w-[min(22rem,calc(100vw-2rem))] glass rounded-2xl shadow-2xl overflow-hidden border border-purple-500/30">
       <div class="btn-primary p-4 flex items-center justify-between"><span class="font-semibold"><i class="fa-solid fa-stethoscope mr-2"></i>Cloudflow Support</span><button onclick="toggleChatbot()"><i class="fa-solid fa-xmark"></i></button></div>
-      <div id="chat-content" class="p-4 h-56 overflow-y-auto space-y-3 text-sm bg-slate-950/35"><div class="bg-slate-800 p-3 rounded-xl">Run a system scan to check your connection, rules, and most recent Meta error.</div></div>
-      <div class="p-3 border-t border-slate-700 flex gap-2"><button onclick="runDiagnosis()" class="flex-1 btn-primary py-2 rounded-lg text-xs font-bold">RUN SCAN</button><a href="mailto:support@cloudflow.com?subject=Cloudflow%20support" class="btn-secondary px-3 py-2 rounded-lg text-xs">HUMAN</a></div>
+      <div id="chat-content" class="p-4 h-64 overflow-y-auto space-y-3 text-sm bg-slate-950/35"><div class="bg-slate-800 p-3 rounded-xl">Run a system scan to check your connection, rules, and most recent Meta error.</div></div>
+      <div class="p-3 border-t border-slate-700 flex gap-2"><button onclick="runDiagnosis()" class="flex-1 btn-primary py-2 rounded-lg text-xs font-bold uppercase tracking-wider">Run system scan</button><a href="mailto:support@cloudflow.com?subject=Cloudflow%20support" class="btn-secondary px-3 py-2 rounded-lg text-xs">HUMAN</a></div>
     </div>
   </div>
 
@@ -231,7 +235,7 @@
   async function start2FA() { try { const data = await jsonFetch('/api/user/2fa/setup', { method:'POST', headers:{Authorization:`Bearer ${currentToken}`} }); $('tfa-secret').textContent = data.secret; $('tfa-uri').textContent = data.otpauthUri; $('tfa-setup').classList.remove('hidden'); $('tfa-message').textContent = 'Scan or enter the secret, then enter the current code.'; } catch (err) { $('tfa-message').textContent = err.message; } }
   async function verify2FA() { try { await jsonFetch('/api/user/2fa/verify', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({code:$('tfa-code').value}) }); $('tfa-setup').classList.add('hidden'); $('tfa-code').value = ''; await loadSettingsStatus(); $('tfa-message').textContent = '2FA is enabled.'; showToast('Two-factor authentication enabled.'); } catch (err) { $('tfa-message').textContent = err.message; } }
   async function disable2FA() { try { await jsonFetch('/api/user/2fa/disable', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({code:$('disable-tfa-code').value}) }); $('disable-tfa-code').value = ''; await loadSettingsStatus(); $('tfa-message').textContent = '2FA is disabled.'; showToast('Two-factor authentication disabled.'); } catch (err) { $('tfa-message').textContent = err.message; } }
-  async function deleteAccount() { if (!confirm('Delete your Cloudflow account and all saved Cloudflow data?')) return; const typed = prompt('Type DELETE to confirm permanent deletion:'); if (typed !== 'DELETE') return showToast('Deletion cancelled.', true); try { await jsonFetch('/api/user/account', { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); localStorage.clear(); alert('Your Cloudflow account was deleted.'); location.reload(); } catch (err) { showToast(err.message, true); } }
+  async function deleteAccount() { if (!confirm('Delete your Cloudflow account and all saved Cloudflow data?')) return; const typed = prompt('Type DELETE to confirm permanent deletion:'); if (!typed || typed.toUpperCase() !== 'DELETE') return showToast('Deletion cancelled.', true); try { await jsonFetch('/api/user/account', { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); localStorage.clear(); alert('Your Cloudflow account was deleted.'); location.reload(); } catch (err) { showToast(err.message, true); } }
 
   function toggleChatbot() { $('chatbot-window').classList.toggle('hidden'); }
   async function runDiagnosis() { const content = $('chat-content'); content.innerHTML += '<div class="bg-purple-500/15 p-3 rounded-xl text-right">Running system scan…</div>'; try { const data = await jsonFetch('/api/help/diagnose', { headers:{Authorization:`Bearer ${currentToken}`} }); content.innerHTML += `<div class="bg-slate-800 p-3 rounded-xl"><p class="font-semibold text-purple-300 mb-1">Diagnosis complete</p><p>${escapeHtml(data.diagnosis)}</p>${data.lastError && data.lastError !== 'No errors recorded.' ? `<p class="mt-2 text-xs text-red-300">Latest server error: ${escapeHtml(data.lastError)}</p>` : ''}</div>`; content.scrollTop = content.scrollHeight; } catch (err) { content.innerHTML += `<div class="bg-red-900/20 p-3 rounded-xl text-red-200">${escapeHtml(err.message)}</div>`; } }
