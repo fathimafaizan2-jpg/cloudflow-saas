@@ -148,6 +148,8 @@ app.get('/api/help/diagnose', authenticateToken, async (req, res) => {
       diagnosis = "Meta Error #3: Capability issue. Ensure 'instagram_manage_messages' has Standard Access and try reconnecting.";
     } else if (lastError.includes('refused to list your pages')) {
       diagnosis = "Meta is blocking your page list. This usually means 'business_management' or 'pages_show_list' permissions are missing in your Meta Dashboard.";
+    } else if (lastError.includes('Token exchange failed') || lastError.includes('client secret')) {
+      diagnosis = "There was a problem with your App Secret. Please re-check your Render Environment variables and then click 'Connect Instagram' again.";
     } else if (Object.keys(accounts || {}).length === 0) {
       diagnosis = "No Instagram account linked. Please click 'Connect Instagram' and ensure you check ALL boxes in the Facebook popup.";
     }
@@ -325,7 +327,9 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     console.log(`📄 Pages Found by Meta: ${pagesData.data?.length || 0}`);
 
-    if (pagesData.data) {
+    if (pagesData.data && pagesData.data.length > 0) {
+      // ✅ SUCCESS: Clear any old error messages from the database
+      await redis.del(`last_error:${userId}`);
       for (const page of pagesData.data) {
         const igRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account&access_token=${page.access_token}`);
         const igData = await igRes.json();
@@ -442,7 +446,12 @@ async function worker() {
                 body: JSON.stringify({ recipient: { id: senderId }, message: { text: rule.responseText } })
               });
               const result = await res.json();
-              if (result.error) await redis.set(`last_error:${userId}`, result.error.message);
+              if (res.ok) {
+                console.log(`✅ DM DELIVERED SUCCESSFULLY to ${senderId}!`);
+              } else {
+                console.error(`❌ DM FAILED: ${JSON.stringify(result.error)}`);
+                await redis.set(`last_error:${userId}`, result.error.message);
+              }
             }
           }
         }
