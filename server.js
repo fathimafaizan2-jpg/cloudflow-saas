@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { Redis } = require('@upstash/redis');
 
 const app = express();
@@ -30,9 +31,79 @@ function authenticateToken(req, res, next) {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: 'Session expired.' });
+    if (user.pending2fa) return res.status(403).json({ error: 'Two-factor verification required.' });
     req.user = user;
     next();
   });
+}
+
+function issueSession(user) {
+  return jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+}
+
+function base32Decode(value) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = String(value || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
+  let bits = '';
+  for (const char of clean) {
+    const index = alphabet.indexOf(char);
+    if (index < 0) continue;
+    bits += index.toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(bytes);
+}
+
+function totpCode(secret, timestamp = Date.now()) {
+  const counter = Math.floor(timestamp / 30000);
+  const counterBuffer = Buffer.alloc(8);
+  counterBuffer.writeBigUInt64BE(BigInt(counter));
+  const digest = crypto.createHmac('sha1', base32Decode(secret)).update(counterBuffer).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  const binary = ((digest[offset] & 0x7f) << 24) | (digest[offset + 1] << 16) | (digest[offset + 2] << 8) | digest[offset + 3];
+  return String(binary % 1000000).padStart(6, '0');
+}
+
+function verifyTotp(secret, code) {
+  const normalized = String(code || '').replace(/\s/g, '');
+  if (!/^\d{6}$/.test(normalized)) return false;
+  for (const drift of [-30000, 0, 30000]) {
+    if (totpCode(secret, Date.now() + drift) === normalized) return true;
+  }
+  return false;
+}
+
+function makeTotpSecret() {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const bytes = crypto.randomBytes(20);
+  let bits = '';
+  for (const byte of bytes) bits += byte.toString(2).padStart(8, '0');
+  let secret = '';
+  for (let i = 0; i + 5 <= bits.length; i += 5) secret += alphabet[parseInt(bits.slice(i, i + 5), 2)];
+  return secret;
+}
+
+async function deleteUserResources(userId, email) {
+  const accounts = await redis.hgetall(`user_pages:${userId}`);
+  const ownedIds = new Set(Object.keys(accounts || {}));
+  const pageTokens = await redis.hgetall('page_tokens');
+  for (const id of Object.keys(pageTokens || {})) {
+    if (await redis.get(`page_owner:${id}`) === userId) ownedIds.add(id);
+  }
+  for (const id of ownedIds) {
+    await redis.hdel('page_tokens', id);
+    await redis.del(`page_owner:${id}`);
+  }
+  if (await redis.get('fallback_user_id') === userId) {
+    await redis.del('fallback_user_id');
+    await redis.del('fallback_token');
+  }
+  await redis.del(`user_pages:${userId}`);
+  await redis.del(`post_rules:${userId}`);
+  await redis.del(`last_error:${userId}`);
+  await redis.del(`user:${email}`);
+  await redis.del(`userid:${userId}`);
 }
 
 // -------------------------------------------------------------
@@ -83,16 +154,22 @@ app.get('/api/help/diagnose', authenticateToken, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 1. AUTHENTICATION
+// 1. AUTHENTICATION & ACCOUNT MANAGEMENT
 // -------------------------------------------------------------
 app.post('/api/signup', async (req, res) => {
   try {
     const { email, password } = req.body;
+    const existing = await redis.get(`user:${email}`);
+    if (existing) return res.status(400).json({ error: 'User already exists' });
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = Date.now().toString();
-    await redis.set(`user:${email}`, JSON.stringify({ id: userId, email, password: hashedPassword }));
+    const userData = { id: userId, email, password: hashedPassword, tfaEnabled: false };
+    await redis.set(`user:${email}`, JSON.stringify(userData));
+    await redis.set(`userid:${userId}`, email);
+
     const token = jwt.sign({ id: userId, email }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { id: userId, email } });
+    res.json({ token, user: { id: userId, email, tfaEnabled: false } });
   } catch (err) { res.status(500).json({ error: 'Signup failed' }); }
 });
 
@@ -102,11 +179,104 @@ app.post('/api/login', async (req, res) => {
     const userData = await redis.get(`user:${email}`);
     if (!userData) return res.status(401).json({ error: 'Invalid credentials' });
     const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
-    if (await bcrypt.compare(password, user.password)) {
-      const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-      res.json({ token, user: { id: user.id, email: user.email } });
-    } else res.status(401).json({ error: 'Invalid credentials' });
+    if (!(await bcrypt.compare(password, user.password))) return res.status(401).json({ error: 'Invalid credentials' });
+
+    if (user.tfaEnabled && user.tfaSecret) {
+      const pendingToken = jwt.sign({ id: user.id, email: user.email, pending2fa: true }, JWT_SECRET, { expiresIn: '10m' });
+      return res.json({ requires2fa: true, pendingToken, user: { id: user.id, email: user.email, tfaEnabled: true } });
+    }
+
+    const token = issueSession(user);
+    res.json({ token, user: { id: user.id, email: user.email, tfaEnabled: false } });
   } catch (err) { res.status(500).json({ error: 'Login failed' }); }
+});
+
+app.post('/api/login/2fa', async (req, res) => {
+  try {
+    const { pendingToken, code } = req.body;
+    const pending = jwt.verify(pendingToken, JWT_SECRET);
+    if (!pending.pending2fa) return res.status(400).json({ error: 'Invalid 2FA session.' });
+    const userData = await redis.get(`user:${pending.email}`);
+    if (!userData) return res.status(401).json({ error: 'Invalid credentials' });
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (!user.tfaEnabled || !verifyTotp(user.tfaSecret, code)) return res.status(401).json({ error: 'Invalid authenticator code.' });
+    const token = issueSession(user);
+    res.json({ token, user: { id: user.id, email: user.email, tfaEnabled: true } });
+  } catch (err) { res.status(401).json({ error: '2FA verification failed.' }); }
+});
+
+app.get('/api/user/settings', authenticateToken, async (req, res) => {
+  const userData = await redis.get(`user:${req.user.email}`);
+  const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+  res.json({ user: { id: user.id, email: user.email, tfaEnabled: Boolean(user.tfaEnabled) } });
+});
+
+app.post('/api/user/2fa/setup', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const userData = await redis.get(`user:${email}`);
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    const secret = makeTotpSecret();
+    user.tfaSetupSecret = secret;
+    await redis.set(`user:${email}`, JSON.stringify(user));
+    const issuer = 'Cloudflow';
+    const label = `${issuer}:${encodeURIComponent(email)}`;
+    const otpauthUri = `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
+    res.json({ secret, otpauthUri });
+  } catch (err) { res.status(500).json({ error: '2FA setup failed' }); }
+});
+
+app.post('/api/user/2fa/verify', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const userData = await redis.get(`user:${email}`);
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (!user.tfaSetupSecret || !verifyTotp(user.tfaSetupSecret, req.body.code)) return res.status(400).json({ error: 'Invalid authenticator code.' });
+    user.tfaSecret = user.tfaSetupSecret;
+    delete user.tfaSetupSecret;
+    user.tfaEnabled = true;
+    await redis.set(`user:${email}`, JSON.stringify(user));
+    res.json({ success: true, tfaEnabled: true });
+  } catch (err) { res.status(500).json({ error: '2FA verification failed' }); }
+});
+
+app.post('/api/user/2fa/disable', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const userData = await redis.get(`user:${email}`);
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (user.tfaEnabled && !verifyTotp(user.tfaSecret, req.body.code)) return res.status(400).json({ error: 'Valid authenticator code required.' });
+    delete user.tfaSecret;
+    delete user.tfaSetupSecret;
+    user.tfaEnabled = false;
+    await redis.set(`user:${email}`, JSON.stringify(user));
+    res.json({ success: true, tfaEnabled: false });
+  } catch (err) { res.status(500).json({ error: '2FA disable failed' }); }
+});
+
+app.post('/api/user/settings', authenticateToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const { newPassword } = req.body;
+    const userData = await redis.get(`user:${email}`);
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+    if (newPassword) {
+      if (String(newPassword).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+      user.password = await bcrypt.hash(newPassword, 12);
+    }
+    await redis.set(`user:${email}`, JSON.stringify(user));
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Settings update failed' }); }
+});
+
+app.delete('/api/user/account', authenticateToken, async (req, res) => {
+  try {
+    await deleteUserResources(req.user.id, req.user.email);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Account deletion failed:', err);
+    res.status(500).json({ error: 'Account deletion failed' });
+  }
 });
 
 // -------------------------------------------------------------
@@ -168,7 +338,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 3. DATA API
+// 3. DATA API & RULE MANAGEMENT
 // -------------------------------------------------------------
 app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
   const accountsMap = await redis.hgetall(`user_pages:${req.user.id}`);
@@ -198,6 +368,17 @@ app.post('/api/rules/post', authenticateToken, async (req, res) => {
   const { mediaId, keyword, responseText, caption, thumbnail } = req.body;
   await redis.hset(`post_rules:${req.user.id}`, { [mediaId]: JSON.stringify({ keyword, responseText, caption, thumbnail, mediaId }) });
   res.json({ success: true });
+});
+
+app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const mediaId = req.params.mediaId;
+    await redis.hdel(`post_rules:${userId}`, mediaId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete rule' });
+  }
 });
 
 // -------------------------------------------------------------
