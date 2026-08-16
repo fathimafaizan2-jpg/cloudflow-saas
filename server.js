@@ -376,7 +376,7 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
 app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
   const rules = await redis.hgetall(`post_rules:${req.user.id}`);
   const parsed = {};
-  for (const [k, v] of Object.entries(rules || {})) parsed[k] = JSON.parse(v);
+  for (const [k, v] of Object.entries(rules || {})) parsed[k] = typeof v === 'string' ? JSON.parse(v) : v;
   res.json({ postRules: parsed });
 });
 
@@ -417,7 +417,7 @@ async function worker() {
     try {
       const raw = await redis.rpop('meta_webhook_queue');
       if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
-      const payload = JSON.parse(raw);
+      const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
       for (const entry of payload.entry || []) {
         const igId = entry.id;
         const userId = await redis.get(`page_owner:${igId}`) || await redis.get('fallback_user_id');
@@ -433,7 +433,7 @@ async function worker() {
           if (!text || !senderId) continue;
 
           for (const rStr of Object.values(rules)) {
-            const rule = JSON.parse(rStr);
+            const rule = typeof rStr === 'string' ? JSON.parse(rStr) : rStr;
             if (text.includes(rule.keyword.toUpperCase())) {
               console.log(`🎯 MATCH! Replying to ${senderId}`);
               const res = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
