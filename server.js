@@ -258,30 +258,39 @@ async function worker() {
       const raw = await redis.rpop('meta_webhook_queue');
       if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
       const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      console.log('📦 Processing Payload...');
       for (const entry of payload.entry || []) {
         const igId = entry.id;
         const userId = await redis.get(`page_owner:${igId}`) || await redis.get('fallback_user_id');
         const token = await redis.hget('page_tokens', igId) || await redis.get('fallback_token');
-        if (!userId || !token) continue;
+        if (!userId || !token) {
+          console.log(`⚠️ Missing owner or token for IG ID: ${igId}`);
+          continue;
+        }
 
         const rules = await redis.hgetall(`post_rules:${userId}`);
+        console.log(`🔎 Found ${Object.keys(rules || {}).length} rules for user ${userId}`);
+        
         const items = [...(entry.messaging || []), ...(entry.changes || [])];
         for (const item of items) {
           const val = item.message || item.value || item;
           const text = (val.text || val.message || '').toUpperCase();
           const senderId = val.from?.id || item.sender?.id;
-          const commentId = val.id; // For private replies
+          const commentId = val.id;
+          
           if (!text || !senderId) continue;
+          console.log(`💬 Incoming Text: "${text}" from ${senderId}`);
 
           for (const rStr of Object.values(rules)) {
             const rule = typeof rStr === 'string' ? JSON.parse(rStr) : rStr;
+            console.log(`   - Comparing to Keyword: "${rule.keyword.toUpperCase()}"`);
+            
             if (text.includes(rule.keyword.toUpperCase())) {
-              console.log(`🎯 MATCH! Replying to ${senderId}`);
+              console.log(`🎯 MATCH! Preparing reply...`);
               
               let endpoint = `https://graph.facebook.com/v19.0/me/messages`;
               let body = { recipient: { id: senderId }, message: { text: rule.responseText } };
 
-              // --- SPECIAL HANDLING FOR COMMENTS (PRIVATE REPLIES) ---
               if (commentId && !item.messaging) {
                 console.log(`💬 Detected Comment. Sending Private Reply to ${commentId}`);
                 endpoint = `https://graph.facebook.com/v19.0/${commentId}/private_replies`;
@@ -301,6 +310,8 @@ async function worker() {
                 console.error(`❌ DM FAILED: ${JSON.stringify(result.error)}`);
                 await redis.set(`last_error:${userId}`, result.error.message);
               }
+            } else {
+              console.log(`   - NO MATCH.`);
             }
           }
         }
