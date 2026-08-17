@@ -171,7 +171,7 @@ app.get('/webhook', (req, res) => {
 
 app.post('/webhook', async (req, res) => {
   console.log('📬 WEBHOOK HIT!');
-  console.log('📦 BODY:', JSON.stringify(req.body, null, 2));
+  console.log('📦 FULL BODY:', JSON.stringify(req.body, null, 2));
   await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
   res.status(200).send('EVENT_RECEIVED');
 });
@@ -186,7 +186,6 @@ async function worker() {
         continue; 
       }
       
-      console.log('📦 Worker found task!');
       const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
       
       for (const entry of payload.entry || []) {
@@ -194,16 +193,13 @@ async function worker() {
         const userId = await redis.get(`page_owner:${igId}`) || await redis.get('fallback_user_id');
         const token = await redis.hget('page_tokens', igId) || await redis.get('fallback_token');
         
-        console.log(`🔍 Checking rules for IG ID: ${igId}, User: ${userId}`);
-        if (!userId || !token) {
-          console.log('⚠️ Missing owner or token, skipping...');
-          continue;
-        }
+        if (!userId || !token) continue;
 
         const rules = await redis.hgetall(`post_rules:${userId}`);
         const items = [...(entry.messaging || []), ...(entry.changes || [])];
         
         for (const item of items) {
+          // Skip edits
           if (item.message_edit) continue;
 
           const val = item.message || item.value || item;
@@ -212,22 +208,22 @@ async function worker() {
           const commentId = val.id;
           
           if (!text || !senderId) continue;
-          console.log(`💬 Processing text: "${text}" from ${senderId}`);
+          console.log(`💬 Processing: "${text}" from ${senderId}`);
 
           for (const rStr of Object.values(rules)) {
             const rule = typeof rStr === 'string' ? JSON.parse(rStr) : rStr;
-            console.log(`   - Comparing to keyword: "${rule.keyword.toUpperCase()}"`);
             
             if (text.includes(rule.keyword.toUpperCase())) {
-              console.log(`🎯 MATCH FOUND! Sending reply...`);
+              console.log(`🎯 MATCH! Preparing reply...`);
 
-              let endpoint = `https://graph.facebook.com/v19.0/me/messages`;
+              // Endpoint logic: Private Reply for comments, Message for DMs
+              let endpoint = `https://graph.facebook.com/v19.0/${igId}/messages`;
               let body = { recipient: { id: senderId }, message: { text: rule.responseText } };
 
               if (commentId && !item.messaging) {
                 console.log(`💬 Sending Private Reply to comment: ${commentId}`);
-                endpoint = `https://graph.facebook.com/v19.0/${commentId}/private_replies`;
-                body = { message: rule.responseText };
+                // recipient should contain comment_id for private replies
+                body = { recipient: { comment_id: commentId }, message: { text: rule.responseText } };
               }
 
               const res = await fetch(endpoint, {
@@ -253,13 +249,8 @@ async function worker() {
   }
 }
 
-// Start Server with 0.0.0.0 binding for Render
-const server = app.listen(PORT, '0.0.0.0', () => {
+// Start Server
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server listening on 0.0.0.0:${PORT}`);
   worker();
-});
-
-// Global error handling to prevent silent crashes
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
