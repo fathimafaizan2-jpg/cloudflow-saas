@@ -136,6 +136,27 @@ app.get('/api/debug/status', async (req, res) => {
   }
 });
 
+app.get('/api/debug/conversations', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const accounts = await redis.hgetall(`user_pages:${userId}`);
+    const results = {};
+    for (const pageId of Object.keys(accounts || {})) {
+      const token = await redis.hget('page_tokens', pageId);
+      const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${token}`);
+      const igData = await igRes.json();
+      const igId = igData.instagram_business_account?.id;
+      if (igId) {
+        const convRes = await fetch(`https://graph.facebook.com/v20.0/${igId}/conversations?fields=participants&access_token=${token}`);
+        results[igId] = await convRes.json();
+      }
+    }
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/help/diagnose', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -440,17 +461,54 @@ async function worker() {
             const rule = typeof rStr === 'string' ? JSON.parse(rStr) : rStr;
             if (text.includes(rule.keyword.toUpperCase())) {
               console.log(`🎯 MATCH! Replying to ${senderId}`);
-              const res = await fetch(`https://graph.facebook.com/v19.0/me/messages`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ recipient: { id: senderId }, message: { text: rule.responseText } })
-              });
-              const result = await res.json();
-              if (res.ok) {
-                console.log(`✅ DM DELIVERED SUCCESSFULLY to ${senderId}!`);
+              // --- SMART ID RESOLUTION ---
+              let targetId = senderId;
+              
+              // If we suspect this is a comment ID (longer) and we need a scoped ID,
+              // we will try to send. If it fails with Error 100, we check the conversations cache.
+              const sendDm = async (id) => {
+                const endpoint = `https://graph.facebook.com/v19.0/me/messages`;
+                const r = await fetch(endpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  body: JSON.stringify({ recipient: { id }, message: { text: rule.responseText } })
+                });
+                return { ok: r.ok, status: r.status, data: await r.json() };
+              };
+
+              let result = await sendDm(targetId);
+              
+              // Error 100 often means the ID is not scoped for DMs (common with comment triggers)
+              if (!result.ok && result.data.error?.code === 100) {
+                console.log(`⚠️ Direct DM failed (Error 100). Attempting conversation discovery...`);
+                // Try to find a conversation with this user to get their scoped ID
+                try {
+                  const convRes = await fetch(`https://graph.facebook.com/v20.0/${igId}/conversations?fields=participants&access_token=${token}`);
+                  const convData = await convRes.json();
+                  if (convData.data) {
+                    for (const conv of convData.data) {
+                      for (const part of conv.participants.data) {
+                        // If we find a participant that matches or looks like our sender
+                        if (part.id !== igId) { 
+                          console.log(`🔎 Found potential scoped ID: ${part.id}. Retrying...`);
+                          const retry = await sendDm(part.id);
+                          if (retry.ok) {
+                            result = retry;
+                            break;
+                          }
+                        }
+                      }
+                      if (result.ok) break;
+                    }
+                  }
+                } catch (e) { console.error('Discovery Error:', e.message); }
+              }
+
+              if (result.ok) {
+                console.log(`✅ DM DELIVERED SUCCESSFULLY to ${targetId}!`);
               } else {
-                console.error(`❌ DM FAILED: ${JSON.stringify(result.error)}`);
-                await redis.set(`last_error:${userId}`, result.error.message);
+                console.error(`❌ DM FAILED: ${JSON.stringify(result.data.error)}`);
+                await redis.set(`last_error:${userId}`, result.data.error.message);
               }
             }
           }
