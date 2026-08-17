@@ -9,7 +9,12 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
+// Initialize Redis
+const redis = new Redis({ 
+  url: process.env.UPSTASH_REDIS_REST_URL, 
+  token: process.env.UPSTASH_REDIS_REST_TOKEN 
+});
+
 const PORT = process.env.PORT || 10000;
 const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'my_secret_token_123').trim();
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
@@ -31,6 +36,9 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+// --- HEALTH CHECK FOR RENDER ---
+app.get('/health', (req, res) => res.status(200).send('OK'));
 
 // --- ADMIN & AUTH ---
 app.get('/api/admin/master-reset', async (req, res) => {
@@ -59,53 +67,6 @@ app.get('/api/debug/status', async (req, res) => {
   }
 });
 
-app.get('/api/debug/conversations', async (req, res) => {
-  try {
-    const fallbackUser = await redis.get('fallback_user_id');
-    if (!fallbackUser) return res.json({ error: 'No user connected yet.' });
-    const accounts = await redis.hgetall(`user_pages:${fallbackUser}`);
-    const results = {};
-    for (const pageId of Object.keys(accounts || {})) {
-      const token = await redis.hget('page_tokens', pageId);
-      const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${token}`);
-      const igData = await igRes.json();
-      const igId = igData.instagram_business_account?.id;
-      if (igId) {
-        const convRes = await fetch(`https://graph.facebook.com/v20.0/${igId}/conversations?fields=participants&access_token=${token}`);
-        results[igId] = await convRes.json();
-      }
-    }
-    res.json({ info: "Showing data for latest connected user", results });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/help/diagnose', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const lastError = await redis.get(`last_error:${userId}`);
-    const tokens = await redis.hgetall('page_tokens');
-    const accounts = await redis.hgetall(`user_pages:${userId}`);
-    
-    let advice = "Everything looks healthy! Try sending a manual DM from your tester to your business account to 'open the door' for Meta.";
-    if (lastError) {
-      if (lastError.includes('capability')) advice = "Meta says your app is missing a permission. Go to 'App Review > Permissions and Features' and ensure 'instagram_manage_messages' has Standard Access.";
-      if (lastError.includes('client secret')) advice = "Your App Secret is incorrect. Please re-copy it from the Meta Dashboard and update it in your Render Environment settings.";
-      if (lastError.includes('100')) advice = "Error 100: Scoped ID mismatch. Please have your tester send a manual DM to your business account first to link their ID.";
-    }
-
-    res.json({ 
-      error: lastError || "None",
-      advice,
-      connectedAccounts: Object.keys(accounts || {}).length,
-      hasTokens: Object.keys(tokens || {}).length > 0
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.post('/api/signup', async (req, res) => {
   const { email, password } = req.body;
   const userId = Date.now().toString();
@@ -123,28 +84,6 @@ app.post('/api/login', async (req, res) => {
     const token = jwt.sign({ id: user.id, email }, JWT_SECRET);
     res.json({ token });
   } else res.status(400).json({ error: 'Wrong password' });
-});
-
-app.post('/api/account/update', authenticateToken, async (req, res) => {
-  try {
-    const { password, twoFactorEnabled } = req.body;
-    const userStr = await redis.hget('users', req.user.email);
-    const user = JSON.parse(userStr);
-    if (password) user.password = await bcrypt.hash(password, 10);
-    user.twoFactorEnabled = twoFactorEnabled;
-    await redis.hset('users', { [req.user.email]: JSON.stringify(user) });
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/account', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    await redis.hdel('users', req.user.email);
-    await redis.del(`user_pages:${userId}`);
-    await redis.del(`post_rules:${userId}`);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- META OAUTH ---
@@ -173,7 +112,6 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
     const pagesData = await pagesRes.json();
 
     if (pagesData.data) {
-      await redis.del(`last_error:${userId}`);
       for (const page of pagesData.data) {
         const igRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account&access_token=${page.access_token}`);
         const igData = await igRes.json();
@@ -219,24 +157,10 @@ app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
   res.json({ posts: postsData.data || [] });
 });
 
-app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
-  const rules = await redis.hgetall(`post_rules:${req.user.id}`);
-  const parsed = {};
-  for (const [k, v] of Object.entries(rules || {})) parsed[k] = typeof v === 'string' ? JSON.parse(v) : v;
-  res.json({ postRules: parsed });
-});
-
 app.post('/api/rules/post', authenticateToken, async (req, res) => {
   const { mediaId, keyword, responseText, caption, thumbnail } = req.body;
   await redis.hset(`post_rules:${req.user.id}`, { [mediaId]: JSON.stringify({ keyword, responseText, caption, thumbnail, mediaId }) });
   res.json({ success: true });
-});
-
-app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
-  try {
-    await redis.hdel(`post_rules:${req.user.id}`, req.params.mediaId);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to delete rule' }); }
 });
 
 // --- WEBHOOKS & WORKER ---
@@ -247,7 +171,7 @@ app.get('/webhook', (req, res) => {
 
 app.post('/webhook', async (req, res) => {
   console.log('📬 WEBHOOK HIT!');
-  console.log('📦 FULL WEBHOOK BODY:', JSON.stringify(req.body, null, 2));
+  console.log('📦 BODY:', JSON.stringify(req.body, null, 2));
   await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
   res.status(200).send('EVENT_RECEIVED');
 });
@@ -257,40 +181,51 @@ async function worker() {
   while (true) {
     try {
       const raw = await redis.rpop('meta_webhook_queue');
-      if (!raw) { await new Promise(r => setTimeout(r, 2000)); continue; }
+      if (!raw) { 
+        await new Promise(r => setTimeout(r, 2000)); 
+        continue; 
+      }
+      
+      console.log('📦 Worker found task!');
       const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
       
       for (const entry of payload.entry || []) {
         const igId = entry.id;
         const userId = await redis.get(`page_owner:${igId}`) || await redis.get('fallback_user_id');
         const token = await redis.hget('page_tokens', igId) || await redis.get('fallback_token');
-        if (!userId || !token) continue;
+        
+        console.log(`🔍 Checking rules for IG ID: ${igId}, User: ${userId}`);
+        if (!userId || !token) {
+          console.log('⚠️ Missing owner or token, skipping...');
+          continue;
+        }
 
         const rules = await redis.hgetall(`post_rules:${userId}`);
         const items = [...(entry.messaging || []), ...(entry.changes || [])];
         
         for (const item of items) {
-          // Ignore message edits, focus on new messages or comment changes
           if (item.message_edit) continue;
 
           const val = item.message || item.value || item;
           const text = (val.text || val.message || '').toUpperCase();
           const senderId = val.from?.id || item.sender?.id;
-          const commentId = val.id; // For comments
+          const commentId = val.id;
           
           if (!text || !senderId) continue;
+          console.log(`💬 Processing text: "${text}" from ${senderId}`);
 
           for (const rStr of Object.values(rules)) {
             const rule = typeof rStr === 'string' ? JSON.parse(rStr) : rStr;
+            console.log(`   - Comparing to keyword: "${rule.keyword.toUpperCase()}"`);
+            
             if (text.includes(rule.keyword.toUpperCase())) {
-              console.log(`🎯 MATCH! Keyword "${rule.keyword}" found in text "${text}"`);
+              console.log(`🎯 MATCH FOUND! Sending reply...`);
 
               let endpoint = `https://graph.facebook.com/v19.0/me/messages`;
               let body = { recipient: { id: senderId }, message: { text: rule.responseText } };
 
-              // If it's a comment, use the Private Reply endpoint
               if (commentId && !item.messaging) {
-                console.log(`💬 Sending Private Reply to comment ID: ${commentId}`);
+                console.log(`💬 Sending Private Reply to comment: ${commentId}`);
                 endpoint = `https://graph.facebook.com/v19.0/${commentId}/private_replies`;
                 body = { message: rule.responseText };
               }
@@ -306,14 +241,25 @@ async function worker() {
                 console.log(`✅ DM DELIVERED SUCCESSFULLY!`);
               } else {
                 console.error(`❌ DM FAILED: ${JSON.stringify(result.error)}`);
-                await redis.set(`last_error:${userId}`, result.error.message);
               }
             }
           }
         }
       }
-    } catch (err) { console.error('Worker Error:', err.message); }
+    } catch (err) { 
+      console.error('Worker Critical Error:', err.message); 
+      await new Promise(r => setTimeout(r, 5000));
+    }
   }
 }
 
-app.listen(PORT, () => { console.log(`🚀 Server on ${PORT}`); worker(); });
+// Start Server with 0.0.0.0 binding for Render
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server listening on 0.0.0.0:${PORT}`);
+  worker();
+});
+
+// Global error handling to prevent silent crashes
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
