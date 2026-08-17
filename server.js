@@ -136,10 +136,13 @@ app.get('/api/debug/status', async (req, res) => {
   }
 });
 
-app.get('/api/debug/conversations', authenticateToken, async (req, res) => {
+app.get('/api/debug/conversations', async (req, res) => {
   try {
-    const userId = req.user.id;
-    const accounts = await redis.hgetall(`user_pages:${userId}`);
+    // Make this public for debugging
+    const fallbackUser = await redis.get('fallback_user_id');
+    if (!fallbackUser) return res.json({ error: 'No user connected yet.' });
+    
+    const accounts = await redis.hgetall(`user_pages:${fallbackUser}`);
     const results = {};
     for (const pageId of Object.keys(accounts || {})) {
       const token = await redis.hget('page_tokens', pageId);
@@ -151,7 +154,7 @@ app.get('/api/debug/conversations', authenticateToken, async (req, res) => {
         results[igId] = await convRes.json();
       }
     }
-    res.json(results);
+    res.json({ info: "Showing data for latest connected user", results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
