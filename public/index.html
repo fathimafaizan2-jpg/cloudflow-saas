@@ -240,7 +240,6 @@
   function closeModal() { $('rule-modal').classList.add('hidden'); $('rule-modal').classList.remove('flex'); }
   async function saveRule() { const keyword = $('modal-keyword').value.trim(); const responseText = $('modal-response').value.trim(); if (!keyword || !responseText || !selectedMedia) { showToast('Add a keyword and response message.', true); return; } try { await jsonFetch('/api/rules/post', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({mediaId:selectedMedia.id,keyword,responseText,thumbnail:selectedMedia.media_type === 'VIDEO' ? selectedMedia.thumbnail_url : selectedMedia.media_url,caption:selectedMedia.caption}) }); closeModal(); await loadRules(); showToast('Automation saved.'); } catch (err) { showToast(err.message, true); } }
 
-  // FIXED: Directly redirects window to backend endpoint to avoid browser CORS/Failed to fetch block
   function connectMeta() {
     if (!currentToken) return showToast('Sign in first.', true);
     window.location.href = `/api/auth/instagram?token=${encodeURIComponent(currentToken)}`;
@@ -256,7 +255,7 @@
   async function deleteAccount() { if (!confirm('Delete your Cloudflow account and all saved Cloudflow data?')) return; const typed = prompt('Type DELETE to confirm permanent deletion:'); if (!typed || typed.toUpperCase() !== 'DELETE') return showToast('Deletion cancelled.', true); try { await jsonFetch('/api/user/account', { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); localStorage.clear(); alert('Your Cloudflow account was deleted.'); location.reload(); } catch (err) { showToast(err.message, true); } }
 
   function toggleChatbot() { $('chatbot-window').classList.toggle('hidden'); }
-  async function runDiagnosis() { const content = $('chat-content'); content.innerHTML += '<div class="bg-purple-500/15 p-3 rounded-xl text-right">Running system scan…</div>'; try { const data = await jsonFetch('/api/help/diagnose', { headers:{Authorization:`Bearer ${currentToken}`} }); content.innerHTML += `<div class="bg-slate-800 p-3 rounded-xl"><p class="font-semibold text-purple-300 mb-1">Diagnosis complete</p><p>${escapeHtml(data.diagnosis)}</p></div>`; content.scrollTop = content.scrollHeight; } catch (err) { content.innerHTML += `<div class="bg-red-900/20 p-3 rounded-xl text-red-200">${escapeHtml(err.message)}</div>`; } }
+  async function runDiagnosis() { const content = $('chat-content'); content.innerHTML += '<div class="bg-purple-500/15 p-3 rounded-xl text-right">Running system scan…</div>'; try { const data = await jsonFetch('/api/debug/status', { headers:{Authorization:`Bearer ${currentToken}`} }); content.innerHTML += `<div class="bg-slate-800 p-3 rounded-xl"><p class="font-semibold text-purple-300 mb-1">Diagnosis complete</p><p>Status: ${escapeHtml(data.status)}</p><p>Active Rules: ${data.rulesCount}</p><p>Tokens Stored: ${data.tokenKeys ? data.tokenKeys.length : 0}</p></div>`; content.scrollTop = content.scrollHeight; } catch (err) { content.innerHTML += `<div class="bg-red-900/20 p-3 rounded-xl text-red-200">${escapeHtml(err.message)}</div>`; } }
 
   const params = new URLSearchParams(location.search);
   if (params.get('meta_connect') === 'success' && params.get('token')) {
