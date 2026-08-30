@@ -121,8 +121,7 @@ async function graphFetch(
   }
 
   if (token) {
-    headers.Authorization =
-      `Bearer ${token}`;
+    headers.Authorization = `Bearer ${token}`;
   }
 
   const response = await fetch(url, {
@@ -147,8 +146,7 @@ async function graphFetch(
     const error = new Error(message);
 
     error.status = response.status;
-    error.meta =
-      data?.error || data;
+    error.meta = data?.error || data;
 
     throw error;
   }
@@ -188,8 +186,7 @@ function authenticateToken(req, res, next) {
         return res
           .status(403)
           .json({
-            error:
-              'Invalid or expired session'
+            error: 'Invalid or expired session'
           });
       }
 
@@ -200,289 +197,219 @@ function authenticateToken(req, res, next) {
 }
 
 // =============================================================================
-// HEALTH
+// HEALTH / DEBUG
 // =============================================================================
 
-app.get(
-  '/health',
-  (req, res) => {
-    res.status(200).send('OK');
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
+app.get('/api/debug/status', async (req, res) => {
+  try {
+    const fallbackUser =
+      await redis.get('fallback_user_id');
+
+    const rules =
+      fallbackUser
+        ? await redis.hgetall(
+            `post_rules:${fallbackUser}`
+          )
+        : {};
+
+    res.json({
+      status: 'Online',
+      graphVersion: GRAPH_VERSION,
+      appIdConfigured: Boolean(META_APP_ID),
+      appSecretConfigured: Boolean(META_APP_SECRET),
+      redirectUri: REDIRECT_URI,
+      webhookConfigured: Boolean(VERIFY_TOKEN),
+      fallbackUser,
+      rulesCount: Object.keys(rules || {}).length
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      error: err.message
+    });
   }
-);
-
-// =============================================================================
-// DEBUG
-// =============================================================================
-
-app.get(
-  '/api/debug/status',
-  async (req, res) => {
-    try {
-      const fallbackUser =
-        await redis.get(
-          'fallback_user_id'
-        );
-
-      const rules =
-        fallbackUser
-          ? await redis.hgetall(
-              `post_rules:${fallbackUser}`
-            )
-          : {};
-
-      res.json({
-        status: 'Online',
-
-        graphVersion:
-          GRAPH_VERSION,
-
-        appIdConfigured:
-          Boolean(META_APP_ID),
-
-        appSecretConfigured:
-          Boolean(META_APP_SECRET),
-
-        redirectUri:
-          REDIRECT_URI,
-
-        webhookConfigured:
-          Boolean(VERIFY_TOKEN),
-
-        fallbackUser,
-
-        rulesCount:
-          Object.keys(
-            rules || {}
-          ).length
-      });
-
-    } catch (err) {
-      res
-        .status(500)
-        .json({
-          error: err.message
-        });
-    }
-  }
-);
+});
 
 // =============================================================================
 // SIGNUP
 // =============================================================================
 
-app.post(
-  '/api/signup',
-  async (req, res) => {
-    try {
-      const {
-        email,
-        password
-      } = req.body || {};
+app.post('/api/signup', async (req, res) => {
+  try {
+    const {
+      email,
+      password
+    } = req.body || {};
 
-      const normalizedEmail =
-        String(email || '')
-          .trim()
-          .toLowerCase();
+    const normalizedEmail =
+      String(email || '')
+        .trim()
+        .toLowerCase();
 
-      if (
-        !normalizedEmail ||
-        !/^\S+@\S+\.\S+$/.test(
-          normalizedEmail
-        )
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'Enter a valid email address.'
-          });
-      }
-
-      if (
-        !password ||
-        String(password).length < 8
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'Password must be at least 8 characters.'
-          });
-      }
-
-      const existing =
-        await redis.hget(
-          'users',
-          normalizedEmail
-        );
-
-      if (existing) {
-        return res
-          .status(409)
-          .json({
-            error:
-              'An account with that email already exists.'
-          });
-      }
-
-      const userId =
-        crypto.randomUUID();
-
-      const hashedPassword =
-        await bcrypt.hash(
-          password,
-          10
-        );
-
-      await redis.hset(
-        'users',
-        {
-          [normalizedEmail]:
-            JSON.stringify({
-              id: userId,
-              email:
-                normalizedEmail,
-              password:
-                hashedPassword
-            })
-        }
-      );
-
-      const token =
-        jwt.sign(
-          {
-            id: userId,
-            email:
-              normalizedEmail
-          },
-          JWT_SECRET,
-          {
-            expiresIn: '7d'
-          }
-        );
-
-      res.json({
-        success: true,
-
-        token,
-
-        user: {
-          id: userId,
-          email:
-            normalizedEmail
-        }
+    if (
+      !normalizedEmail ||
+      !/^\S+@\S+\.\S+$/.test(normalizedEmail)
+    ) {
+      return res.status(400).json({
+        error: 'Enter a valid email address.'
       });
+    }
 
-    } catch (err) {
+    if (
+      !password ||
+      String(password).length < 8
+    ) {
+      return res.status(400).json({
+        error: 'Password must be at least 8 characters.'
+      });
+    }
 
-      console.error(
-        'Signup error:',
-        err
+    const existing =
+      await redis.hget(
+        'users',
+        normalizedEmail
       );
 
-      res
-        .status(500)
-        .json({
-          error:
-            'Unable to create account.'
-        });
+    if (existing) {
+      return res.status(409).json({
+        error: 'An account with that email already exists.'
+      });
     }
+
+    const userId =
+      crypto.randomUUID();
+
+    const hashedPassword =
+      await bcrypt.hash(
+        password,
+        10
+      );
+
+    await redis.hset(
+      'users',
+      {
+        [normalizedEmail]:
+          JSON.stringify({
+            id: userId,
+            email: normalizedEmail,
+            password: hashedPassword
+          })
+      }
+    );
+
+    const token =
+      jwt.sign(
+        {
+          id: userId,
+          email: normalizedEmail
+        },
+        JWT_SECRET,
+        {
+          expiresIn: '7d'
+        }
+      );
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: userId,
+        email: normalizedEmail
+      }
+    });
+
+  } catch (err) {
+    console.error(
+      'Signup error:',
+      err
+    );
+
+    res.status(500).json({
+      error: 'Unable to create account.'
+    });
   }
-);
+});
 
 // =============================================================================
 // LOGIN
 // =============================================================================
 
-app.post(
-  '/api/login',
-  async (req, res) => {
-    try {
-      const {
-        email,
-        password
-      } = req.body || {};
+app.post('/api/login', async (req, res) => {
+  try {
+    const {
+      email,
+      password
+    } = req.body || {};
 
-      const normalizedEmail =
-        String(email || '')
-          .trim()
-          .toLowerCase();
+    const normalizedEmail =
+      String(email || '')
+        .trim()
+        .toLowerCase();
 
-      const userStr =
-        await redis.hget(
-          'users',
-          normalizedEmail
-        );
-
-      if (!userStr) {
-        return res
-          .status(400)
-          .json({
-            error: 'User not found'
-          });
-      }
-
-      const user =
-        safeParse(userStr);
-
-      if (
-        !user ||
-        !(
-          await bcrypt.compare(
-            String(
-              password || ''
-            ),
-            user.password
-          )
-        )
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'Wrong password'
-          });
-      }
-
-      const token =
-        jwt.sign(
-          {
-            id: user.id,
-            email:
-              normalizedEmail
-          },
-          JWT_SECRET,
-          {
-            expiresIn: '7d'
-          }
-        );
-
-      res.json({
-        token,
-
-        user: {
-          id: user.id,
-          email:
-            normalizedEmail
-        }
-      });
-
-    } catch (err) {
-
-      console.error(
-        'Login error:',
-        err
+    const userStr =
+      await redis.hget(
+        'users',
+        normalizedEmail
       );
 
-      res
-        .status(500)
-        .json({
-          error:
-            'Login failed.'
-        });
+    if (!userStr) {
+      return res.status(400).json({
+        error: 'User not found'
+      });
     }
+
+    const user =
+      safeParse(userStr);
+
+    if (
+      !user ||
+      !(
+        await bcrypt.compare(
+          String(password || ''),
+          user.password
+        )
+      )
+    ) {
+      return res.status(400).json({
+        error: 'Wrong password'
+      });
+    }
+
+    const token =
+      jwt.sign(
+        {
+          id: user.id,
+          email: normalizedEmail
+        },
+        JWT_SECRET,
+        {
+          expiresIn: '7d'
+        }
+      );
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: normalizedEmail
+      }
+    });
+
+  } catch (err) {
+    console.error(
+      'Login error:',
+      err
+    );
+
+    res.status(500).json({
+      error: 'Login failed.'
+    });
   }
-);
+});
 
 // =============================================================================
 // DELETE ACCOUNT
@@ -522,178 +449,138 @@ app.delete(
 
       res.json({
         success: true,
-        message:
-          'Account deleted successfully.'
+        message: 'Account deleted successfully.'
       });
 
     } catch (err) {
-
-      console.error(
-        'Account delete error:',
-        err
-      );
-
-      res
-        .status(500)
-        .json({
-          error:
-            'Unable to delete account.'
-        });
+      res.status(500).json({
+        error: 'Unable to delete account.'
+      });
     }
   }
 );
 
 // =============================================================================
-// META OAUTH START
+// META OAUTH
 // =============================================================================
 
-app.get(
-  '/api/auth/instagram',
-  async (req, res) => {
+app.get('/api/auth/instagram', async (req, res) => {
+  try {
+    requireEnv(
+      'META_APP_ID',
+      META_APP_ID
+    );
 
-    try {
+    requireEnv(
+      'JWT_SECRET',
+      JWT_SECRET
+    );
 
-      requireEnv(
-        'META_APP_ID',
-        META_APP_ID
-      );
+    const sessionToken =
+      String(req.query.token || '');
 
-      requireEnv(
-        'JWT_SECRET',
+    const user =
+      jwt.verify(
+        sessionToken,
         JWT_SECRET
       );
 
-      const sessionToken =
-        String(
-          req.query.token || ''
-        );
+    const state =
+      crypto
+        .randomBytes(32)
+        .toString('hex');
 
-      const user =
-        jwt.verify(
-          sessionToken,
-          JWT_SECRET
-        );
+    await redis.set(
+      `oauth_state:${state}`,
+      JSON.stringify({
+        userId: user.id,
+        email: user.email
+      }),
+      {
+        ex: 600
+      }
+    );
 
-      const state =
-        crypto
-          .randomBytes(32)
-          .toString('hex');
+    const scopes = [
+      'instagram_basic',
+      'instagram_manage_comments',
+      'instagram_manage_messages',
+      'pages_show_list',
+      'pages_read_engagement',
+      'pages_messaging',
+      'business_management'
+    ].join(',');
 
-      await redis.set(
-        `oauth_state:${state}`,
-        JSON.stringify({
-          userId:
-            user.id,
-          email:
-            user.email
-        }),
-        {
-          ex: 600
-        }
+    const url =
+      new URL(
+        `https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth`
       );
 
-      const scopes = [
-        'instagram_basic',
+    url.searchParams.set(
+      'client_id',
+      META_APP_ID
+    );
 
-        'instagram_manage_comments',
+    url.searchParams.set(
+      'redirect_uri',
+      REDIRECT_URI
+    );
 
-        'instagram_manage_messages',
+    url.searchParams.set(
+      'response_type',
+      'code'
+    );
 
-        'pages_show_list',
+    url.searchParams.set(
+      'scope',
+      scopes
+    );
 
-        'pages_read_engagement',
+    url.searchParams.set(
+      'state',
+      state
+    );
 
-        'pages_messaging',
-
-        'business_management'
-      ].join(',');
-
-      const url =
-        new URL(
-          `https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth`
-        );
-
-      url.searchParams.set(
-        'client_id',
-        META_APP_ID
-      );
-
-      url.searchParams.set(
-        'redirect_uri',
-        REDIRECT_URI
-      );
-
-      url.searchParams.set(
-        'response_type',
-        'code'
-      );
-
-      url.searchParams.set(
-        'scope',
+    console.log(
+      '🔐 Starting Meta OAuth:',
+      {
+        redirectUri: REDIRECT_URI,
+        graphVersion: GRAPH_VERSION,
         scopes
-      );
+      }
+    );
 
-      url.searchParams.set(
-        'state',
-        state
-      );
+    res.redirect(
+      url.toString()
+    );
 
-      console.log(
-        '🔐 Starting Meta OAuth:',
-        {
-          redirectUri:
-            REDIRECT_URI,
+  } catch (err) {
+    console.error(
+      'OAuth start error:',
+      err
+    );
 
-          graphVersion:
-            GRAPH_VERSION,
-
-          scopes
-        }
-      );
-
-      res.redirect(
-        url.toString()
-      );
-
-    } catch (err) {
-
-      console.error(
-        'OAuth start error:',
-        err
-      );
-
-      res.redirect(
-        `/?error=${encodeURIComponent(
-          err.message
-        )}`
-      );
-    }
+    res.redirect(
+      `/?error=${encodeURIComponent(err.message)}`
+    );
   }
-);
+});
 
 // =============================================================================
-// FACEBOOK PAGE WEBHOOK SUBSCRIPTION
-//
-// Keep this because your current Instagram messaging / inbox webhook path
-// already works through the Page connection.
+// PAGE WEBHOOK SUBSCRIPTION
 // =============================================================================
 
 async function subscribePage(
   pageId,
   pageAccessToken
 ) {
-
   try {
-
     const result =
       await graphFetch(
         `/${pageId}/subscribed_apps`,
         {
           method: 'POST',
-
-          token:
-            pageAccessToken,
-
+          token: pageAccessToken,
           params: {
             subscribed_fields:
               'messages,messaging_postbacks,feed'
@@ -709,11 +596,9 @@ async function subscribePage(
     return result;
 
   } catch (err) {
-
     console.error(
       `⚠️ Page webhook subscription failed for ${pageId}:`,
-      err.meta ||
-      err.message
+      err.meta || err.message
     );
 
     return null;
@@ -721,69 +606,29 @@ async function subscribePage(
 }
 
 // =============================================================================
-// INSTAGRAM COMMENT WEBHOOK SUBSCRIPTION
+// INSTAGRAM WEBHOOK STATUS
 //
 // IMPORTANT:
-// Your previous function did not make an API request at all.
-// It simply returned { success: true }.
+// We DO NOT call /{igId}/subscribed_apps here.
 //
-// This now attempts to subscribe the linked IG professional account.
+// Your Meta Dashboard already shows:
+// comments = SUBSCRIBED
+//
+// The previous API call returned:
+// (#3) Application does not have the capability to make this API call.
 // =============================================================================
 
 async function subscribeInstagram(
   igId,
   pageAccessToken
 ) {
+  console.log(
+    `ℹ️ Instagram ${igId}: comments webhook configured through Meta Dashboard.`
+  );
 
-  try {
-
-    console.log(
-      `📡 Attempting Instagram comments subscription for ${igId}...`
-    );
-
-    const result =
-      await graphFetch(
-        `/${igId}/subscribed_apps`,
-        {
-          method: 'POST',
-
-          token:
-            pageAccessToken,
-
-          params: {
-            subscribed_fields:
-              'comments,live_comments'
-          }
-        }
-      );
-
-    console.log(
-      `✅ Instagram comments subscribed: ${igId}`,
-      result
-    );
-
-    return result;
-
-  } catch (err) {
-
-    console.error(
-      `❌ Instagram comments subscription failed for ${igId}:`,
-      err.meta ||
-      err.message
-    );
-
-    /*
-      Do not stop OAuth here.
-
-      Depending on the exact Meta webhook configuration,
-      your App Dashboard subscription may be the mechanism
-      controlling Instagram comment delivery.
-
-      The error is deliberately logged so we can inspect it.
-    */
-
-    return null;
-  }
+  return {
+    success: true
+  };
 }
 
 // =============================================================================
@@ -793,9 +638,7 @@ async function subscribeInstagram(
 app.get(
   '/api/auth/instagram/callback',
   async (req, res) => {
-
     try {
-
       requireEnv(
         'META_APP_ID',
         META_APP_ID
@@ -815,46 +658,34 @@ app.get(
 
       if (error) {
         throw new Error(
-          error_description ||
-          error
+          error_description || error
         );
       }
 
-      if (
-        !code ||
-        !state
-      ) {
+      if (!code || !state) {
         throw new Error(
           'Meta did not return an authorization code/state.'
         );
       }
 
       const stateKey =
-        `oauth_state:${String(
-          state
-        )}`;
+        `oauth_state:${String(state)}`;
 
       const stateData =
         safeParse(
-          await redis.get(
-            stateKey
-          )
+          await redis.get(stateKey)
         );
 
-      await redis.del(
-        stateKey
-      );
+      await redis.del(stateKey);
 
-      if (
-        !stateData?.userId
-      ) {
+      if (!stateData?.userId) {
         throw new Error(
           'OAuth state expired or is invalid. Please try Connect Instagram again.'
         );
       }
 
       // -----------------------------------------------------------------------
-      // Exchange OAuth code
+      // EXCHANGE CODE FOR USER TOKEN
       // -----------------------------------------------------------------------
 
       const tokenData =
@@ -862,15 +693,9 @@ app.get(
           '/oauth/access_token',
           {
             params: {
-              client_id:
-                META_APP_ID,
-
-              redirect_uri:
-                REDIRECT_URI,
-
-              client_secret:
-                META_APP_SECRET,
-
+              client_id: META_APP_ID,
+              redirect_uri: REDIRECT_URI,
+              client_secret: META_APP_SECRET,
               code
             }
           }
@@ -879,25 +704,21 @@ app.get(
       const userAccessToken =
         tokenData.access_token;
 
-      if (
-        !userAccessToken
-      ) {
+      if (!userAccessToken) {
         throw new Error(
           'Meta did not return a user access token.'
         );
       }
 
       // -----------------------------------------------------------------------
-      // Load Pages
+      // LOAD FACEBOOK PAGES
       // -----------------------------------------------------------------------
 
       const pagesData =
         await graphFetch(
           '/me/accounts',
           {
-            token:
-              userAccessToken,
-
+            token: userAccessToken,
             params: {
               fields:
                 'id,name,access_token,tasks,instagram_business_account'
@@ -906,12 +727,9 @@ app.get(
         );
 
       if (
-        !Array.isArray(
-          pagesData.data
-        ) ||
+        !Array.isArray(pagesData.data) ||
         pagesData.data.length === 0
       ) {
-
         throw new Error(
           'Meta login succeeded, but no Facebook Pages were returned. Make sure the Instagram account is Professional and linked to a Facebook Page.'
         );
@@ -920,48 +738,31 @@ app.get(
       let connected = 0;
       let firstPageToken = null;
 
-      // -----------------------------------------------------------------------
-      // Process each Page
-      // -----------------------------------------------------------------------
-
-      for (
-        const page
-        of pagesData.data
-      ) {
-
+      for (const page of pagesData.data) {
         const pageId =
           page.id;
 
         const pageToken =
           page.access_token;
 
-        if (
-          !pageId ||
-          !pageToken
-        ) {
+        if (!pageId || !pageToken) {
           continue;
         }
 
         let igId =
-          page
-            .instagram_business_account
-            ?.id;
+          page.instagram_business_account?.id;
 
         // ---------------------------------------------------------------------
-        // Fallback IG lookup
+        // FALLBACK INSTAGRAM LOOKUP
         // ---------------------------------------------------------------------
 
         if (!igId) {
-
           try {
-
             const pageData =
               await graphFetch(
                 `/${pageId}`,
                 {
-                  token:
-                    userAccessToken,
-
+                  token: userAccessToken,
                   params: {
                     fields:
                       'id,name,access_token,instagram_business_account,tasks'
@@ -970,22 +771,17 @@ app.get(
               );
 
             igId =
-              pageData
-                .instagram_business_account
-                ?.id;
+              pageData.instagram_business_account?.id;
 
           } catch (err) {
-
             console.error(
               `Page lookup failed for ${pageId}:`,
-              err.meta ||
-              err.message
+              err.meta || err.message
             );
           }
         }
 
         if (!igId) {
-
           console.log(
             `ℹ️ Page has no linked Instagram Professional account: ${page.name} (${pageId})`
           );
@@ -994,60 +790,52 @@ app.get(
         }
 
         // ---------------------------------------------------------------------
-        // Load IG profile
+        // LOAD INSTAGRAM PROFILE
         // ---------------------------------------------------------------------
 
         const igProfile =
           await graphFetch(
             `/${igId}`,
             {
-              token:
-                pageToken,
-
+              token: pageToken,
               params: {
                 fields:
                   'id,username,name,profile_picture_url'
               }
             }
-          ).catch(
-            err => {
+          ).catch(err => {
+            console.error(
+              `Instagram profile lookup failed for ${igId}:`,
+              err.meta || err.message
+            );
 
-              console.error(
-                `Instagram profile lookup failed for ${igId}:`,
-                err.meta ||
-                err.message
-              );
-
-              return {};
-            }
-          );
+            return {};
+          });
 
         console.log(
           `🔗 Linked Instagram: ${igId} (${igProfile.username || 'unknown'}) → Page ${pageId}`
         );
 
         // ---------------------------------------------------------------------
-        // Store Page and Instagram tokens
+        // STORE TOKENS
         // ---------------------------------------------------------------------
 
         await redis.hset(
           'page_tokens',
           {
-            [pageId]:
-              pageToken
+            [pageId]: pageToken
           }
         );
 
         await redis.hset(
           'page_tokens',
           {
-            [igId]:
-              pageToken
+            [igId]: pageToken
           }
         );
 
         // ---------------------------------------------------------------------
-        // Store user's connected account
+        // STORE ACCOUNT
         // ---------------------------------------------------------------------
 
         await redis.hset(
@@ -1056,26 +844,19 @@ app.get(
             [pageId]:
               JSON.stringify({
                 pageId,
-
                 pageName:
-                  page.name ||
-                  'Facebook Page',
-
+                  page.name || 'Facebook Page',
                 igId,
-
                 igUsername:
-                  igProfile.username ||
-                  '',
-
+                  igProfile.username || '',
                 igName:
-                  igProfile.name ||
-                  ''
+                  igProfile.name || ''
               })
           }
         );
 
         // ---------------------------------------------------------------------
-        // Store ownership mappings
+        // STORE ID MAPPINGS
         // ---------------------------------------------------------------------
 
         await redis.set(
@@ -1099,7 +880,7 @@ app.get(
         );
 
         // ---------------------------------------------------------------------
-        // Subscribe Page
+        // SUBSCRIBE FACEBOOK PAGE
         // ---------------------------------------------------------------------
 
         await subscribePage(
@@ -1108,7 +889,7 @@ app.get(
         );
 
         // ---------------------------------------------------------------------
-        // Subscribe Instagram comments
+        // INSTAGRAM WEBHOOK IS CONFIGURED IN META DASHBOARD
         // ---------------------------------------------------------------------
 
         await subscribeInstagram(
@@ -1125,15 +906,10 @@ app.get(
       }
 
       if (!connected) {
-
         throw new Error(
           'Facebook login completed, but no Instagram Professional account was found on the Pages you selected.'
         );
       }
-
-      // -----------------------------------------------------------------------
-      // Fallback mapping for development/testing
-      // -----------------------------------------------------------------------
 
       await redis.set(
         'fallback_user_id',
@@ -1141,7 +917,6 @@ app.get(
       );
 
       if (firstPageToken) {
-
         await redis.set(
           'fallback_token',
           firstPageToken
@@ -1157,16 +932,11 @@ app.get(
       );
 
     } catch (err) {
-
       console.error(
         '❌ OAuth callback error:',
         {
-          message:
-            err.message,
-
-          meta:
-            err.meta ||
-            null
+          message: err.message,
+          meta: err.meta || null
         }
       );
 
@@ -1176,9 +946,7 @@ app.get(
         'Meta connection failed.';
 
       res.redirect(
-        `/?error=${encodeURIComponent(
-          detail
-        )}`
+        `/?error=${encodeURIComponent(detail)}`
       );
     }
   }
@@ -1192,9 +960,7 @@ app.get(
   '/api/instagram/accounts',
   authenticateToken,
   async (req, res) => {
-
     try {
-
       const accountsMap =
         await redis.hgetall(
           `user_pages:${req.user.id}`
@@ -1205,16 +971,13 @@ app.get(
           accountsMap || {}
         ).map(
           ([pageId, value]) => {
-
             const parsed =
               safeParse(value);
 
             if (parsed) {
-
               return {
                 pageId:
-                  parsed.pageId ||
-                  pageId,
+                  parsed.pageId || pageId,
 
                 name:
                   parsed.igUsername
@@ -1225,26 +988,21 @@ app.get(
                     ),
 
                 igId:
-                  parsed.igId ||
-                  '',
+                  parsed.igId || '',
 
                 igUsername:
-                  parsed.igUsername ||
-                  ''
+                  parsed.igUsername || ''
               };
             }
 
             return {
               pageId,
-
               name:
                 String(
                   value ||
                   'Instagram account'
                 ),
-
               igId: '',
-
               igUsername: ''
             };
           }
@@ -1255,18 +1013,15 @@ app.get(
       });
 
     } catch (err) {
-
       console.error(
         'Load accounts error:',
         err
       );
 
-      res
-        .status(500)
-        .json({
-          error:
-            'Unable to load connected accounts.'
-        });
+      res.status(500).json({
+        error:
+          'Unable to load connected accounts.'
+      });
     }
   }
 );
@@ -1279,21 +1034,15 @@ app.get(
   '/api/instagram/posts',
   authenticateToken,
   async (req, res) => {
-
     try {
-
       const {
         pageId
       } = req.query;
 
       if (!pageId) {
-
-        return res
-          .status(400)
-          .json({
-            error:
-              'pageId is required.'
-          });
+        return res.status(400).json({
+          error: 'pageId is required.'
+        });
       }
 
       const connectionRaw =
@@ -1303,9 +1052,7 @@ app.get(
         );
 
       const connection =
-        safeParse(
-          connectionRaw
-        );
+        safeParse(connectionRaw);
 
       const igId =
         connection?.igId ||
@@ -1318,13 +1065,10 @@ app.get(
         );
 
       if (!token) {
-
-        return res
-          .status(404)
-          .json({
-            error:
-              'Instagram connection token not found. Reconnect Instagram.'
-          });
+        return res.status(404).json({
+          error:
+            'Instagram connection token not found. Reconnect Instagram.'
+        });
       }
 
       const postsData =
@@ -1332,11 +1076,9 @@ app.get(
           `/${igId}/media`,
           {
             token,
-
             params: {
               fields:
                 'id,caption,media_url,media_type,thumbnail_url,permalink,timestamp',
-
               limit: 50
             }
           }
@@ -1344,22 +1086,18 @@ app.get(
 
       res.json({
         posts:
-          postsData.data ||
-          []
+          postsData.data || []
       });
 
     } catch (err) {
-
       console.error(
         'Load posts error:',
-        err.meta ||
-        err
+        err.meta || err
       );
 
       res
         .status(
-          err.status ||
-          500
+          err.status || 500
         )
         .json({
           error:
@@ -1372,16 +1110,14 @@ app.get(
 );
 
 // =============================================================================
-// SAVE POST RULE
+// RULES
 // =============================================================================
 
 app.post(
   '/api/rules/post',
   authenticateToken,
   async (req, res) => {
-
     try {
-
       const {
         mediaId,
         keyword,
@@ -1395,13 +1131,10 @@ app.post(
         !keyword ||
         !responseText
       ) {
-
-        return res
-          .status(400)
-          .json({
-            error:
-              'mediaId, keyword and responseText are required.'
-          });
+        return res.status(400).json({
+          error:
+            'mediaId, keyword and responseText are required.'
+        });
       }
 
       const rule = {
@@ -1409,12 +1142,10 @@ app.post(
           String(mediaId),
 
         keyword:
-          String(keyword)
-            .trim(),
+          String(keyword).trim(),
 
         responseText:
-          String(responseText)
-            .trim(),
+          String(responseText).trim(),
 
         caption:
           caption || '',
@@ -1440,33 +1171,24 @@ app.post(
       });
 
     } catch (err) {
-
       console.error(
         'Save rule error:',
         err
       );
 
-      res
-        .status(500)
-        .json({
-          error:
-            'Unable to save automation.'
-        });
+      res.status(500).json({
+        error:
+          'Unable to save automation.'
+      });
     }
   }
 );
-
-// =============================================================================
-// DASHBOARD DATA
-// =============================================================================
 
 app.get(
   '/api/dashboard-data',
   authenticateToken,
   async (req, res) => {
-
     try {
-
       const postRules =
         await redis.hgetall(
           `post_rules:${req.user.id}`
@@ -1480,7 +1202,6 @@ app.get(
           postRules || {}
         )
       ) {
-
         const rule =
           safeParse(value);
 
@@ -1496,28 +1217,19 @@ app.get(
       });
 
     } catch (err) {
-
-      res
-        .status(500)
-        .json({
-          error:
-            'Unable to load automations.'
-        });
+      res.status(500).json({
+        error:
+          'Unable to load automations.'
+      });
     }
   }
 );
-
-// =============================================================================
-// DELETE RULE
-// =============================================================================
 
 app.delete(
   '/api/rules/post/:mediaId',
   authenticateToken,
   async (req, res) => {
-
     try {
-
       await redis.hdel(
         `post_rules:${req.user.id}`,
         req.params.mediaId
@@ -1528,13 +1240,10 @@ app.delete(
       });
 
     } catch (err) {
-
-      res
-        .status(500)
-        .json({
-          error:
-            'Unable to delete automation.'
-        });
+      res.status(500).json({
+        error:
+          'Unable to delete automation.'
+      });
     }
   }
 );
@@ -1543,125 +1252,98 @@ app.delete(
 // WEBHOOK VERIFICATION
 // =============================================================================
 
-app.get(
-  '/webhook',
-  (req, res) => {
+app.get('/webhook', (req, res) => {
+  const mode =
+    req.query['hub.mode'];
 
-    const mode =
-      req.query['hub.mode'];
+  const token =
+    req.query['hub.verify_token'];
 
-    const token =
-      req.query['hub.verify_token'];
+  const challenge =
+    req.query['hub.challenge'];
 
-    const challenge =
-      req.query['hub.challenge'];
-
-    if (
-      mode === 'subscribe' &&
-      token === VERIFY_TOKEN &&
-      challenge
-    ) {
-
-      console.log(
-        '✅ Meta webhook verification successful'
-      );
-
-      return res
-        .status(200)
-        .type('text/plain')
-        .send(challenge);
-    }
-
-    console.error(
-      '❌ Meta webhook verification failed'
+  if (
+    mode === 'subscribe' &&
+    token === VERIFY_TOKEN &&
+    challenge
+  ) {
+    console.log(
+      '✅ Meta webhook verification successful'
     );
 
     return res
-      .sendStatus(403);
+      .status(200)
+      .type('text/plain')
+      .send(challenge);
   }
-);
+
+  console.error(
+    '❌ Meta webhook verification failed'
+  );
+
+  return res.sendStatus(403);
+});
 
 // =============================================================================
 // WEBHOOK RECEIVER
 // =============================================================================
 
-app.post(
-  '/webhook',
-  async (req, res) => {
+app.post('/webhook', async (req, res) => {
+  // Reply to Meta immediately.
+  res
+    .status(200)
+    .send('EVENT_RECEIVED');
 
-    /*
-      Respond immediately.
+  try {
+    console.log(
+      '\n=============================================='
+    );
 
-      Meta expects webhook endpoints to respond quickly.
-    */
+    console.log(
+      '📬 WEBHOOK HIT:',
+      req.body?.object
+    );
 
-    res
-      .status(200)
-      .send(
-        'EVENT_RECEIVED'
-      );
+    // TEMPORARY DEBUG LOG:
+    // Keep this until comment automation works.
+    console.log(
+      '📦 FULL WEBHOOK BODY:'
+    );
 
-    try {
+    console.log(
+      JSON.stringify(
+        req.body,
+        null,
+        2
+      )
+    );
 
-      console.log(
-        '\n=============================================='
-      );
+    console.log(
+      '==============================================\n'
+    );
 
-      console.log(
-        '📬 WEBHOOK HIT:',
-        req.body?.object
-      );
-
-      /*
-        IMPORTANT FOR DEBUGGING:
-
-        Leave this enabled until comments work.
-        This lets us see the exact Meta payload.
-      */
-
-      console.log(
-        '📦 FULL WEBHOOK BODY:'
-      );
-
-      console.log(
+    if (
+      req.body?.object === 'instagram' ||
+      req.body?.object === 'page'
+    ) {
+      await redis.lpush(
+        'meta_webhook_queue',
         JSON.stringify(
-          req.body,
-          null,
-          2
+          req.body
         )
       );
-
-      console.log(
-        '==============================================\n'
-      );
-
-      if (
-        req.body?.object ===
-          'instagram' ||
-        req.body?.object ===
-          'page'
-      ) {
-
-        await redis.lpush(
-          'meta_webhook_queue',
-          JSON.stringify(
-            req.body
-          )
-        );
-      }
-
-    } catch (err) {
-
-      console.error(
-        'Webhook queue error:',
-        err
-      );
     }
+
+  } catch (err) {
+    console.error(
+      'Webhook queue error:',
+      err
+    );
   }
-);
+});
 
 // =============================================================================
-// SEND INSTAGRAM MESSAGE
+// SEND INSTAGRAM MESSAGE / PRIVATE REPLY
 // =============================================================================
 
 async function sendInstagramMessage({
@@ -1671,21 +1353,15 @@ async function sendInstagramMessage({
   commentId,
   text
 }) {
-
   let body;
 
-  // ---------------------------------------------------------------------------
-  // COMMENT → PRIVATE REPLY
-  // ---------------------------------------------------------------------------
-
+  // COMMENT -> PRIVATE REPLY
   if (commentId) {
-
     body = {
       recipient: {
         comment_id:
           String(commentId)
       },
-
       message: {
         text:
           String(text)
@@ -1697,14 +1373,9 @@ async function sendInstagramMessage({
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // NORMAL INSTAGRAM DM
-  // ---------------------------------------------------------------------------
-
+  // NORMAL DM
   else {
-
     if (!senderId) {
-
       throw new Error(
         'Cannot send normal Instagram DM because senderId is missing.'
       );
@@ -1715,7 +1386,6 @@ async function sendInstagramMessage({
         id:
           String(senderId)
       },
-
       message: {
         text:
           String(text)
@@ -1726,14 +1396,6 @@ async function sendInstagramMessage({
       `📨 Sending normal Instagram DM | IG=${igId} | recipient=${senderId}`
     );
   }
-
-  /*
-    IMPORTANT FIX:
-
-    Do not use /me/messages here.
-
-    Use the actual Instagram Professional Account ID.
-  */
 
   return graphFetch(
     `/${igId}/messages`,
@@ -1746,21 +1408,16 @@ async function sendInstagramMessage({
 }
 
 // =============================================================================
-// NORMALIZE WEBHOOK EVENT
+// NORMALIZE WEBHOOK EVENTS
 // =============================================================================
 
 function normalizeWebhookEvent(
   entry,
   item
 ) {
-
   if (!item) {
     return null;
   }
-
-  // ---------------------------------------------------------------------------
-  // Ignore non-message delivery events
-  // ---------------------------------------------------------------------------
 
   if (
     item.read ||
@@ -1775,18 +1432,14 @@ function normalizeWebhookEvent(
   // ---------------------------------------------------------------------------
 
   if (
-    item.field ===
-      'comments' ||
-    item.field ===
-      'live_comments'
+    item.field === 'comments' ||
+    item.field === 'live_comments'
   ) {
-
     const value =
       item.value || {};
 
     return {
-      type:
-        'comment',
+      type: 'comment',
 
       commentId:
         value.id ||
@@ -1815,23 +1468,12 @@ function normalizeWebhookEvent(
   }
 
   // ---------------------------------------------------------------------------
-  // FACEBOOK PAGE "feed" FORMAT
-  //
-  // This is kept as a compatibility fallback.
+  // PAGE FEED COMMENT FALLBACK
   // ---------------------------------------------------------------------------
 
-  if (
-    item.field ===
-    'feed'
-  ) {
-
+  if (item.field === 'feed') {
     const value =
       item.value || {};
-
-    /*
-      Only treat it as a comment
-      if Meta explicitly says it is a comment.
-    */
 
     if (
       value.item &&
@@ -1841,8 +1483,7 @@ function normalizeWebhookEvent(
     }
 
     return {
-      type:
-        'comment',
+      type: 'comment',
 
       commentId:
         value.comment_id ||
@@ -1871,14 +1512,13 @@ function normalizeWebhookEvent(
   }
 
   // ---------------------------------------------------------------------------
-  // INSTAGRAM DIRECT MESSAGE
+  // NORMAL INSTAGRAM DM
   // ---------------------------------------------------------------------------
 
   if (
     item.sender &&
     item.message
   ) {
-
     if (
       item.message.is_echo
     ) {
@@ -1886,8 +1526,7 @@ function normalizeWebhookEvent(
     }
 
     return {
-      type:
-        'message',
+      type: 'message',
 
       senderId:
         item.sender.id,
@@ -1901,11 +1540,8 @@ function normalizeWebhookEvent(
         item.message.id ||
         null,
 
-      mediaId:
-        null,
-
-      commentId:
-        null
+      mediaId: null,
+      commentId: null
     };
   }
 
@@ -1913,13 +1549,12 @@ function normalizeWebhookEvent(
 }
 
 // =============================================================================
-// PROCESS META WEBHOOK
+// PROCESS WEBHOOK
 // =============================================================================
 
 async function processWebhookPayload(
   payload
 ) {
-
   if (
     !payload ||
     !Array.isArray(
@@ -1933,7 +1568,6 @@ async function processWebhookPayload(
     const entry
     of payload.entry
   ) {
-
     const entryId =
       String(
         entry.id || ''
@@ -1943,14 +1577,7 @@ async function processWebhookPayload(
       continue;
     }
 
-    /*
-      Some Meta events identify the Page,
-      while other Instagram events identify
-      the Instagram Professional Account.
-
-      Resolve either form.
-    */
-
+    // A webhook may contain the Page ID or IG ID.
     const mappedInstagramId =
       await redis.get(
         `ig_for_page:${entryId}`
@@ -1965,7 +1592,7 @@ async function processWebhookPayload(
     );
 
     // -------------------------------------------------------------------------
-    // Find CloudFlow user
+    // FIND CLOUDFLOW OWNER
     // -------------------------------------------------------------------------
 
     const userId =
@@ -1980,7 +1607,7 @@ async function processWebhookPayload(
       );
 
     // -------------------------------------------------------------------------
-    // Find Page access token
+    // FIND ACCESS TOKEN
     // -------------------------------------------------------------------------
 
     const token =
@@ -2000,7 +1627,6 @@ async function processWebhookPayload(
       !userId ||
       !token
     ) {
-
       console.warn(
         `⚠️ No Cloudflow owner/token for webhook entry=${entryId}, ig=${igId}`
       );
@@ -2009,7 +1635,7 @@ async function processWebhookPayload(
     }
 
     // -------------------------------------------------------------------------
-    // Load automation rules
+    // LOAD RULES
     // -------------------------------------------------------------------------
 
     const rulesMap =
@@ -2021,12 +1647,8 @@ async function processWebhookPayload(
       Object.values(
         rulesMap || {}
       )
-        .map(
-          safeParse
-        )
-        .filter(
-          Boolean
-        );
+        .map(safeParse)
+        .filter(Boolean);
 
     console.log(
       `📋 Loaded ${rules.length} automation rule(s) for user ${userId}`
@@ -2034,54 +1656,36 @@ async function processWebhookPayload(
 
     const events = [];
 
-    // =========================================================================
-    // FORMAT 1:
-    //
-    // entry.field + entry.value
-    //
-    // Some Instagram webhook payloads can expose the field directly
-    // on the entry.
-    // =========================================================================
+    // -------------------------------------------------------------------------
+    // COMMENT FORMAT: field/value directly on entry
+    // -------------------------------------------------------------------------
 
     if (
-      entry.field ===
-        'comments' ||
-      entry.field ===
-        'live_comments'
+      entry.field === 'comments' ||
+      entry.field === 'live_comments'
     ) {
-
       const event =
         normalizeWebhookEvent(
           entry,
           {
-            field:
-              entry.field,
-
-            value:
-              entry.value
+            field: entry.field,
+            value: entry.value
           }
         );
 
       if (event) {
-        events.push(
-          event
-        );
+        events.push(event);
       }
     }
 
-    // =========================================================================
-    // FORMAT 2:
-    //
-    // entry.messaging[]
-    //
-    // Your current DM webhook already uses this family of events.
-    // =========================================================================
+    // -------------------------------------------------------------------------
+    // MESSAGING EVENTS
+    // -------------------------------------------------------------------------
 
     for (
       const item
       of entry.messaging || []
     ) {
-
       const event =
         normalizeWebhookEvent(
           entry,
@@ -2089,25 +1693,18 @@ async function processWebhookPayload(
         );
 
       if (event) {
-        events.push(
-          event
-        );
+        events.push(event);
       }
     }
 
-    // =========================================================================
-    // FORMAT 3:
-    //
-    // entry.changes[]
-    //
-    // Instagram comments commonly arrive here.
-    // =========================================================================
+    // -------------------------------------------------------------------------
+    // COMMENT / CHANGE EVENTS
+    // -------------------------------------------------------------------------
 
     for (
       const item
       of entry.changes || []
     ) {
-
       const event =
         normalizeWebhookEvent(
           entry,
@@ -2115,9 +1712,7 @@ async function processWebhookPayload(
         );
 
       if (event) {
-        events.push(
-          event
-        );
+        events.push(event);
       }
     }
 
@@ -2125,22 +1720,20 @@ async function processWebhookPayload(
       `📥 Normalized events: ${events.length}`
     );
 
-    // =========================================================================
-    // PROCESS EACH EVENT
-    // =========================================================================
+    // -------------------------------------------------------------------------
+    // PROCESS EVENTS
+    // -------------------------------------------------------------------------
 
     for (
       const event
       of events
     ) {
-
       const text =
         String(
           event.text || ''
         ).trim();
 
       if (!text) {
-
         console.log(
           'ℹ️ Event ignored because it contains no text.'
         );
@@ -2160,15 +1753,14 @@ async function processWebhookPayload(
       const upperText =
         text.toUpperCase();
 
-      // =========================================================================
-      // CHECK AUTOMATION RULES
-      // =========================================================================
+      // -----------------------------------------------------------------------
+      // CHECK RULES
+      // -----------------------------------------------------------------------
 
       for (
         const rule
         of rules
       ) {
-
         const keyword =
           String(
             rule.keyword || ''
@@ -2180,29 +1772,20 @@ async function processWebhookPayload(
           continue;
         }
 
-        // ---------------------------------------------------------------------
-        // COMMENT MUST MATCH SELECTED POST
-        // ---------------------------------------------------------------------
-
+        // Exact selected Instagram post
         if (
-          event.type ===
-            'comment' &&
+          event.type === 'comment' &&
           rule.mediaId &&
           event.mediaId &&
           String(rule.mediaId) !==
             String(event.mediaId)
         ) {
-
           console.log(
             `⏭️ Post mismatch | rule media=${rule.mediaId} | comment media=${event.mediaId}`
           );
 
           continue;
         }
-
-        // ---------------------------------------------------------------------
-        // KEYWORD MATCH
-        // ---------------------------------------------------------------------
 
         if (
           !upperText.includes(
@@ -2216,16 +1799,11 @@ async function processWebhookPayload(
           `🎯 MATCH | type=${event.type} | media=${rule.mediaId} | keyword=${keyword}`
         );
 
-        // ---------------------------------------------------------------------
-        // COMMENTS REQUIRE COMMENT ID
-        // ---------------------------------------------------------------------
-
+        // Comment private reply requires comment ID.
         if (
-          event.type ===
-            'comment' &&
+          event.type === 'comment' &&
           !event.commentId
         ) {
-
           console.error(
             '❌ Comment matched, but Meta webhook did not contain a comment ID.'
           );
@@ -2233,24 +1811,17 @@ async function processWebhookPayload(
           continue;
         }
 
-        // ---------------------------------------------------------------------
-        // SEND
-        // ---------------------------------------------------------------------
-
         try {
-
           const result =
             await sendInstagramMessage({
               igId,
-
               token,
 
               senderId:
                 event.senderId,
 
               commentId:
-                event.type ===
-                  'comment'
+                event.type === 'comment'
                   ? event.commentId
                   : null,
 
@@ -2260,13 +1831,10 @@ async function processWebhookPayload(
 
           console.log(
             '✅ META SEND SUCCESS:',
-            JSON.stringify(
-              result
-            )
+            JSON.stringify(result)
           );
 
         } catch (err) {
-
           console.error(
             '❌ META SEND FAILED:',
             {
@@ -2274,8 +1842,7 @@ async function processWebhookPayload(
                 err.message,
 
               meta:
-                err.meta ||
-                null,
+                err.meta || null,
 
               event
             }
@@ -2287,26 +1854,22 @@ async function processWebhookPayload(
 }
 
 // =============================================================================
-// BACKGROUND WORKER
+// WORKER
 // =============================================================================
 
 async function worker() {
-
   console.log(
     '👷 Cloudflow Meta worker active...'
   );
 
   while (true) {
-
     try {
-
       const raw =
         await redis.rpop(
           'meta_webhook_queue'
         );
 
       if (!raw) {
-
         await new Promise(
           resolve =>
             setTimeout(
@@ -2319,8 +1882,7 @@ async function worker() {
       }
 
       const payload =
-        typeof raw ===
-          'string'
+        typeof raw === 'string'
           ? JSON.parse(raw)
           : raw;
 
@@ -2329,7 +1891,6 @@ async function worker() {
       );
 
     } catch (err) {
-
       console.error(
         'Worker critical error:',
         err
@@ -2347,14 +1908,13 @@ async function worker() {
 }
 
 // =============================================================================
-// START SERVER
+// START
 // =============================================================================
 
 app.listen(
   PORT,
   '0.0.0.0',
   () => {
-
     console.log(
       `🚀 Cloudflow listening on 0.0.0.0:${PORT}`
     );
