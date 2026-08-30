@@ -181,7 +181,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// PERMANENT ACCOUNT DELETION
 app.delete('/api/user/account', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -267,36 +266,8 @@ async function subscribePage(pageId, pageAccessToken) {
 }
 
 async function subscribeInstagram(igId, pageAccessToken) {
-  try {
-    const result = await graphFetch(`/${igId}/subscribed_apps`, {
-      method: 'POST',
-      token: pageAccessToken,
-      params: { subscribed_fields: 'comments,messages' }
-    });
-    console.log(`✅ Instagram webhook subscribed: ${igId}`, result);
-    return result;
-  } catch (firstErr) {
-    console.error(`⚠️ Instagram subscription via graph.facebook.com failed for ${igId}:`, firstErr.meta || firstErr.message);
-
-    try {
-      const url = new URL(`https://graph.instagram.com/${GRAPH_VERSION}/${igId}/subscribed_apps`);
-      url.searchParams.set('subscribed_fields', 'comments,messages');
-      url.searchParams.set('access_token', pageAccessToken);
-
-      const response = await fetch(url, { method: 'POST' });
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok || data.success === false) {
-        throw new Error(data?.error?.message || `HTTP ${response.status}`);
-      }
-
-      console.log(`✅ Instagram webhook subscribed via graph.instagram.com: ${igId}`, data);
-      return data;
-    } catch (secondErr) {
-      console.error(`❌ Instagram webhook subscription failed for ${igId}:`, secondErr.message);
-      return null;
-    }
-  }
+  console.log(`ℹ️ Instagram account ${igId} managed via Page webhook.`);
+  return { success: true };
 }
 
 app.get('/api/auth/instagram/callback', async (req, res) => {
@@ -609,13 +580,13 @@ function normalizeWebhookEvent(entry, item) {
   const msg = item.message || item.value || {};
   if (msg.is_echo) return null;
 
-  if (item.field === 'comments' || item.field === 'live_comments') {
+  if (item.field === 'comments' || item.field === 'live_comments' || item.field === 'feed') {
     const value = item.value || {};
     return {
       type: 'comment',
-      commentId: value.id,
-      text: value.text || '',
-      mediaId: value.media?.id || null,
+      commentId: value.id || value.comment_id,
+      text: value.text || value.message || '',
+      mediaId: value.media?.id || value.post_id || null,
       senderId: value.from?.id || null,
       senderUsername: value.from?.username || null
     };
@@ -666,7 +637,7 @@ async function processWebhookPayload(payload) {
     }
 
     for (const item of entry.changes || []) {
-      const event = normalizeWebhookEvent(event, item);
+      const event = normalizeWebhookEvent(entry, item);
       if (event) events.push(event);
     }
 
@@ -686,7 +657,7 @@ async function processWebhookPayload(payload) {
         const keyword = String(rule.keyword || '').trim().toUpperCase();
         if (!keyword) continue;
 
-        if (event.type === 'comment' && rule.mediaId !== event.mediaId) {
+        if (event.type === 'comment' && rule.mediaId && event.mediaId && rule.mediaId !== event.mediaId) {
           continue;
         }
 
