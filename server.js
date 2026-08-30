@@ -28,8 +28,8 @@ const safeParse = (val) => {
 
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.sendStatus(401);
+  const token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
+  if (!token || token === 'undefined') return res.sendStatus(401);
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.sendStatus(403);
     req.user = user;
@@ -68,37 +68,100 @@ app.get('/api/debug/status', async (req, res) => {
 });
 
 app.post('/api/signup', async (req, res) => {
-  const { email, password } = req.body;
-  const userId = Date.now().toString();
-  const hashedPassword = await bcrypt.hash(password, 10);
-  await redis.hset('users', { [email]: JSON.stringify({ id: userId, password: hashedPassword }) });
-  res.json({ success: true });
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+    
+    const lowerEmail = email.toLowerCase().trim();
+    const existing = await redis.hget('users', lowerEmail);
+    if (existing) return res.status(400).json({ error: 'Account already exists.' });
+
+    const userId = Date.now().toString();
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userData = { id: userId, email: lowerEmail, password: hashedPassword };
+
+    await redis.hset('users', { [lowerEmail]: JSON.stringify(userData) });
+    const token = jwt.sign({ id: userId, email: lowerEmail }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({ success: true, token, user: { id: userId, email: lowerEmail } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  const userStr = await redis.hget('users', email);
-  if (!userStr) return res.status(400).json({ error: 'User not found' });
-  const user = JSON.parse(userStr);
-  if (await bcrypt.compare(password, user.password)) {
-    const token = jwt.sign({ id: user.id, email }, JWT_SECRET);
-    res.json({ token });
-  } else res.status(400).json({ error: 'Wrong password' });
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+    const lowerEmail = email.toLowerCase().trim();
+    const userRaw = await redis.hget('users', lowerEmail);
+    if (!userRaw) return res.status(400).json({ error: 'Invalid email or password.' });
+
+    const user = safeParse(userRaw);
+    if (!user || !user.password) return res.status(400).json({ error: 'Invalid user data structure.' });
+
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) return res.status(400).json({ error: 'Invalid email or password.' });
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ success: true, token, user: { id: user.id, email: user.email } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PERMANENT ACCOUNT DELETION
+app.delete('/api/user/account', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const lowerEmail = req.user.email ? req.user.email.toLowerCase() : null;
+
+    if (lowerEmail) {
+      await redis.hdel('users', lowerEmail);
+    }
+    
+    await redis.del(`user_pages:${userId}`);
+    await redis.del(`post_rules:${userId}`);
+
+    console.log(`🗑️ Permanently deleted account data for user ${userId}`);
+    res.json({ success: true, message: 'Account deleted successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- META OAUTH ---
 app.get('/api/auth/instagram', (req, res) => {
-  const { token } = req.query;
-  const user = jwt.verify(token, JWT_SECRET);
-  const state = Buffer.from(JSON.stringify({ userId: user.id, token })).toString('base64');
-  const scope = 'instagram_basic,instagram_manage_messages,instagram_manage_comments,pages_show_list,pages_read_engagement,pages_messaging';
-  const url = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.META_APP_ID}&redirect_uri=${encodeURIComponent(`https://${req.get('host')}/api/auth/instagram/callback`)}&scope=${scope}&state=${state}`;
-  res.redirect(url);
+  try {
+    const { token } = req.query;
+    if (!token || token === 'undefined') {
+      return res.redirect('/?error=login_required');
+    }
+
+    let user;
+    try {
+      user = jwt.verify(token, JWT_SECRET);
+    } catch (e) {
+      return res.redirect('/?error=session_expired');
+    }
+
+    const state = Buffer.from(JSON.stringify({ userId: user.id, token })).toString('base64');
+    const scope = 'instagram_basic,instagram_manage_messages,instagram_manage_comments,pages_show_list,pages_read_engagement,pages_messaging,business_management';
+    const redirectUri = `https://${req.get('host')}/api/auth/instagram/callback`;
+    const url = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.META_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`;
+    res.redirect(url);
+  } catch (err) {
+    console.error('OAuth Init Error:', err.message);
+    res.redirect('/?error=oauth_init_failed');
+  }
 });
 
 app.get('/api/auth/instagram/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
+    if (!code) return res.redirect('/?error=missing_code');
+
     const { userId, token: userJwtToken } = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
     const appId = process.env.META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;
@@ -141,26 +204,69 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
 // --- DATA API ---
 app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
-  const accountsMap = await redis.hgetall(`user_pages:${req.user.id}`);
-  res.json({ accounts: Object.entries(accountsMap || {}).map(([pageId, name]) => ({ pageId, name })) });
+  try {
+    const accountsMap = await redis.hgetall(`user_pages:${req.user.id}`);
+    res.json({ accounts: Object.entries(accountsMap || {}).map(([pageId, name]) => ({ pageId, name })) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/instagram/posts', authenticateToken, async (req, res) => {
-  const { pageId } = req.query;
-  const token = await redis.hget('page_tokens', pageId);
-  const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${token}`);
-  const igData = await igRes.json();
-  const igId = igData.instagram_business_account?.id;
-  if (!igId) return res.json({ posts: [] });
-  const postsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/media?fields=id,caption,media_url,media_type,thumbnail_url&access_token=${token}`);
-  const postsData = await postsRes.json();
-  res.json({ posts: postsData.data || [] });
+  try {
+    const { pageId } = req.query;
+    if (!pageId) return res.status(400).json({ error: 'Page ID required' });
+
+    const token = await redis.hget('page_tokens', pageId);
+    if (!token) return res.status(400).json({ error: 'Page access token not found.' });
+
+    const igRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account&access_token=${token}`);
+    const igData = await igRes.json();
+    const igId = igData.instagram_business_account?.id;
+    if (!igId) return res.json({ posts: [] });
+
+    const postsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/media?fields=id,caption,media_url,media_type,thumbnail_url&access_token=${token}`);
+    const postsData = await postsRes.json();
+    res.json({ posts: postsData.data || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/rules/post', authenticateToken, async (req, res) => {
-  const { mediaId, keyword, responseText, caption, thumbnail } = req.body;
-  await redis.hset(`post_rules:${req.user.id}`, { [mediaId]: JSON.stringify({ keyword, responseText, caption, thumbnail, mediaId }) });
-  res.json({ success: true });
+  try {
+    const { mediaId, keyword, responseText, caption, thumbnail } = req.body;
+    await redis.hset(`post_rules:${req.user.id}`, { [mediaId]: JSON.stringify({ keyword, responseText, caption, thumbnail, mediaId }) });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const postRules = (await redis.hgetall(`post_rules:${userId}`)) || {};
+    const userPages = (await redis.hgetall(`user_pages:${userId}`)) || {};
+
+    const parsedRules = {};
+    for (const [key, val] of Object.entries(postRules)) {
+      parsedRules[key] = safeParse(val);
+    }
+
+    res.json({ postRules: parsedRules, connectedPagesCount: Object.keys(userPages).length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/rules/post/:mediaId', authenticateToken, async (req, res) => {
+  try {
+    await redis.hdel(`post_rules:${req.user.id}`, req.params.mediaId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- WEBHOOKS & WORKER ---
@@ -170,10 +276,16 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', async (req, res) => {
-  console.log('📬 WEBHOOK HIT!');
-  console.log('📦 FULL BODY:', JSON.stringify(req.body, null, 2));
-  await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
-  res.status(200).send('EVENT_RECEIVED');
+  try {
+    if (req.body.object === 'instagram' || req.body.object === 'page') {
+      console.log('📬 WEBHOOK HIT!');
+      await redis.lpush('meta_webhook_queue', JSON.stringify(req.body));
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+    res.sendStatus(404);
+  } catch (err) {
+    res.sendStatus(500);
+  }
 });
 
 async function worker() {
@@ -199,7 +311,6 @@ async function worker() {
         const items = [...(entry.messaging || []), ...(entry.changes || [])];
         
         for (const item of items) {
-          // Skip edits
           if (item.message_edit) continue;
 
           const val = item.message || item.value || item;
@@ -211,18 +322,17 @@ async function worker() {
           console.log(`💬 Processing: "${text}" from ${senderId}`);
 
           for (const rStr of Object.values(rules)) {
-            const rule = typeof rStr === 'string' ? JSON.parse(rStr) : rStr;
+            const rule = safeParse(rStr);
+            if (!rule || !rule.keyword) continue;
             
             if (text.includes(rule.keyword.toUpperCase())) {
               console.log(`🎯 MATCH! Preparing reply...`);
 
-              // Endpoint logic: Private Reply for comments, Message for DMs
-              let endpoint = `https://graph.facebook.com/v19.0/${igId}/messages`;
+              let endpoint = `https://graph.facebook.com/v19.0/me/messages`;
               let body = { recipient: { id: senderId }, message: { text: rule.responseText } };
 
               if (commentId && !item.messaging) {
                 console.log(`💬 Sending Private Reply to comment: ${commentId}`);
-                // recipient should contain comment_id for private replies
                 body = { recipient: { comment_id: commentId }, message: { text: rule.responseText } };
               }
 
