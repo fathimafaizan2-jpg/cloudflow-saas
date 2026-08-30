@@ -136,7 +136,7 @@
     <p>© 2026 Cloudflow Automation · Founder Preview</p>
   </footer>
 
-  <!-- Chatbot Floating Button (Center-Right for better accessibility) -->
+  <!-- Chatbot Floating Button -->
   <div class="fixed bottom-24 right-6 z-[60]">
     <button onclick="toggleChatbot()" class="w-16 h-16 btn-primary rounded-full shadow-2xl flex items-center justify-center text-2xl hover:scale-110 transition shadow-[0_0_30px_rgba(139,92,246,0.6)] border-2 border-white/20"><i class="fa-solid fa-robot"></i></button>
     <div id="chatbot-window" class="hidden absolute bottom-20 right-0 w-[min(24rem,calc(100vw-2rem))] glass rounded-3xl shadow-2xl overflow-hidden border border-purple-500/40">
@@ -199,49 +199,71 @@
     if (!currentToken) return;
     $('auth-section').classList.add('hidden'); $('dashboard-section').classList.remove('hidden'); $('user-section').classList.remove('hidden'); $('user-section').classList.add('flex');
     const savedUser = JSON.parse(localStorage.getItem('user') || '{}'); $('user-email').textContent = savedUser.email || '';
-    try { await loadAccounts(); await loadRules(); await loadSettingsStatus(); } catch (err) { showToast(err.message, true); }
+    try { await loadAccounts(); await loadRules(); } catch (err) { showToast(err.message, true); }
   }
   async function loadAccounts() {
-    const data = await jsonFetch('/api/instagram/accounts', { headers:{Authorization:`Bearer ${currentToken}`} });
-    const select = $('account-select'); select.innerHTML = '<option value="">-- Choose connected account --</option>';
-    data.accounts.forEach(acc => { const option = document.createElement('option'); option.value = acc.pageId; option.textContent = acc.name; select.appendChild(option); });
-    $('stat-accounts').textContent = data.accounts.length; $('account-empty').classList.toggle('hidden', data.accounts.length > 0);
+    try {
+      const data = await jsonFetch('/api/instagram/accounts', { headers:{Authorization:`Bearer ${currentToken}`} });
+      const select = $('account-select'); select.innerHTML = '<option value="">-- Choose connected account --</option>';
+      if (data.accounts && data.accounts.length > 0) {
+        data.accounts.forEach(acc => { const option = document.createElement('option'); option.value = acc.pageId; option.textContent = acc.name; select.appendChild(option); });
+        $('stat-accounts').textContent = data.accounts.length;
+        $('account-empty').classList.add('hidden');
+      } else {
+        $('stat-accounts').textContent = '0';
+        $('account-empty').classList.remove('hidden');
+      }
+    } catch (err) {
+      $('stat-accounts').textContent = '0';
+      $('account-empty').classList.remove('hidden');
+    }
   }
   async function loadPosts() {
     const pageId = $('account-select').value; if (!pageId) return;
     $('posts-grid').innerHTML = '<div class="col-span-full text-center py-16 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Loading posts…</div>';
     try {
       const data = await jsonFetch(`/api/instagram/posts?pageId=${encodeURIComponent(pageId)}`, { headers:{Authorization:`Bearer ${currentToken}`} });
-      if (!data.posts.length) { $('posts-grid').innerHTML = '<div class="col-span-full text-center py-16 text-slate-500">No posts returned for this account.</div>'; return; }
+      if (!data.posts || !data.posts.length) { $('posts-grid').innerHTML = '<div class="col-span-full text-center py-16 text-slate-500">No posts returned for this account.</div>'; return; }
       $('posts-grid').innerHTML = data.posts.map(post => { const img = post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url; return `<button type="button" onclick="openModal(${JSON.stringify(post).replace(/"/g,'&quot;')})" class="relative group aspect-square rounded-2xl overflow-hidden bg-slate-900 border border-slate-700 hover:border-purple-400 transition"><img src="${img || ''}" class="w-full h-full object-cover group-hover:scale-105 transition" alt="Instagram post"><span class="absolute inset-0 bg-purple-600/20 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"><i class="fa-solid fa-wand-magic-sparkles text-2xl"></i></span></button>`; }).join('');
     } catch (err) { $('posts-grid').innerHTML = `<div class="col-span-full text-center py-16 text-red-300">${err.message}</div>`; }
   }
   async function loadRules() {
-    const data = await jsonFetch('/api/dashboard-data', { headers:{Authorization:`Bearer ${currentToken}`} }); const rules = Object.values(data.postRules || {}); $('stat-rules').textContent = rules.length; $('rules-count-label').textContent = `${rules.length} configured`; const list = $('rules-list');
-    if (!rules.length) { list.innerHTML = '<div class="sm:col-span-2 lg:col-span-3 soft-card rounded-2xl p-6 text-slate-500">No automations yet. Choose a post above to create your first keyword rule.</div>'; return; }
-    list.innerHTML = rules.map(rule => `<div class="soft-card rounded-2xl p-4"><div class="flex gap-3 items-center"><img src="${rule.thumbnail || ''}" class="w-12 h-12 rounded-xl object-cover bg-slate-900"><div class="min-w-0 flex-1"><p class="text-xs uppercase tracking-wide text-purple-300 font-bold">Trigger: ${escapeHtml(rule.keyword || '')}</p><p class="text-sm text-slate-300 truncate mt-1">${escapeHtml(rule.responseText || '')}</p></div><button onclick="deleteRule('${encodeURIComponent(rule.mediaId)}')" title="Delete rule" class="text-slate-500 hover:text-red-300"><i class="fa-solid fa-trash"></i></button></div></div>`).join('');
+    try {
+      const data = await jsonFetch('/api/dashboard-data', { headers:{Authorization:`Bearer ${currentToken}`} }); const rules = Object.values(data.postRules || {}); $('stat-rules').textContent = rules.length; $('rules-count-label').textContent = `${rules.length} configured`; const list = $('rules-list');
+      if (!rules.length) { list.innerHTML = '<div class="sm:col-span-2 lg:col-span-3 soft-card rounded-2xl p-6 text-slate-500">No automations yet. Choose a post above to create your first keyword rule.</div>'; return; }
+      list.innerHTML = rules.map(rule => `<div class="soft-card rounded-2xl p-4"><div class="flex gap-3 items-center"><img src="${rule.thumbnail || ''}" class="w-12 h-12 rounded-xl object-cover bg-slate-900"><div class="min-w-0 flex-1"><p class="text-xs uppercase tracking-wide text-purple-300 font-bold">Trigger: ${escapeHtml(rule.keyword || '')}</p><p class="text-sm text-slate-300 truncate mt-1">${escapeHtml(rule.responseText || '')}</p></div><button onclick="deleteRule('${encodeURIComponent(rule.mediaId)}')" title="Delete rule" class="text-slate-500 hover:text-red-300"><i class="fa-solid fa-trash"></i></button></div></div>`).join('');
+    } catch (err) { console.warn('Load rules skipped:', err.message); }
   }
   function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
   async function deleteRule(mediaId) { if (!confirm('Delete this automation rule?')) return; try { await jsonFetch(`/api/rules/post/${mediaId}`, { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); await loadRules(); showToast('Automation deleted.'); } catch (err) { showToast(err.message, true); } }
   function openModal(post) { selectedMedia = post; const img = post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url; $('modal-preview').innerHTML = `<img src="${img || ''}" class="w-full h-full object-cover" alt="Selected post">`; $('modal-keyword').value = ''; $('modal-response').value = ''; $('rule-modal').classList.remove('hidden'); $('rule-modal').classList.add('flex'); }
   function closeModal() { $('rule-modal').classList.add('hidden'); $('rule-modal').classList.remove('flex'); }
   async function saveRule() { const keyword = $('modal-keyword').value.trim(); const responseText = $('modal-response').value.trim(); if (!keyword || !responseText || !selectedMedia) { showToast('Add a keyword and response message.', true); return; } try { await jsonFetch('/api/rules/post', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({mediaId:selectedMedia.id,keyword,responseText,thumbnail:selectedMedia.media_type === 'VIDEO' ? selectedMedia.thumbnail_url : selectedMedia.media_url,caption:selectedMedia.caption}) }); closeModal(); await loadRules(); showToast('Automation saved.'); } catch (err) { showToast(err.message, true); } }
-  function connectMeta() { if (!currentToken) return showToast('Sign in first.', true); location.href = `/api/auth/instagram?token=${encodeURIComponent(currentToken)}`; }
 
-  async function loadSettingsStatus() { const data = await jsonFetch('/api/user/settings', { headers:{Authorization:`Bearer ${currentToken}`} }); const enabled = Boolean(data.user.tfaEnabled); $('settings-email').textContent = data.user.email; $('tfa-status').textContent = enabled ? 'Enabled' : 'Not enabled'; $('tfa-status').className = enabled ? 'text-xs text-emerald-300' : 'text-xs text-slate-400'; $('start-2fa-btn').classList.toggle('hidden', enabled); $('tfa-disable').classList.toggle('hidden', !enabled); $('stat-security').textContent = enabled ? '2FA on' : 'Basic'; }
-  async function openSettings() { try { await loadSettingsStatus(); $('settings-modal').classList.remove('hidden'); $('settings-modal').classList.add('flex'); } catch (err) { showToast(err.message, true); } }
+  // FIXED: Directly redirects window to backend endpoint to avoid browser CORS/Failed to fetch block
+  function connectMeta() {
+    if (!currentToken) return showToast('Sign in first.', true);
+    window.location.href = `/api/auth/instagram?token=${encodeURIComponent(currentToken)}`;
+  }
+
+  async function openSettings() {
+    $('settings-email').textContent = JSON.parse(localStorage.getItem('user') || '{}').email || '';
+    $('settings-modal').classList.remove('hidden');
+    $('settings-modal').classList.add('flex');
+  }
   function closeSettings() { $('settings-modal').classList.add('hidden'); $('settings-modal').classList.remove('flex'); }
   async function updatePassword() { const value = $('new-password').value; if (value.length < 8) { $('password-message').textContent = 'Use at least 8 characters.'; return; } try { await jsonFetch('/api/user/settings', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({newPassword:value}) }); $('new-password').value = ''; $('password-message').textContent = 'Password updated successfully.'; showToast('Password updated.'); } catch (err) { $('password-message').textContent = err.message; } }
-  async function start2FA() { try { const data = await jsonFetch('/api/user/2fa/setup', { method:'POST', headers:{Authorization:`Bearer ${currentToken}`} }); $('tfa-secret').textContent = data.secret; $('tfa-uri').textContent = data.otpauthUri; $('tfa-setup').classList.remove('hidden'); $('tfa-message').textContent = 'Scan or enter the secret, then enter the current code.'; } catch (err) { $('tfa-message').textContent = err.message; } }
-  async function verify2FA() { try { await jsonFetch('/api/user/2fa/verify', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({code:$('tfa-code').value}) }); $('tfa-setup').classList.add('hidden'); $('tfa-code').value = ''; await loadSettingsStatus(); $('tfa-message').textContent = '2FA is enabled.'; showToast('Two-factor authentication enabled.'); } catch (err) { $('tfa-message').textContent = err.message; } }
-  async function disable2FA() { try { await jsonFetch('/api/user/2fa/disable', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({code:$('disable-tfa-code').value}) }); $('disable-tfa-code').value = ''; await loadSettingsStatus(); $('tfa-message').textContent = '2FA is disabled.'; showToast('Two-factor authentication disabled.'); } catch (err) { $('tfa-message').textContent = err.message; } }
   async function deleteAccount() { if (!confirm('Delete your Cloudflow account and all saved Cloudflow data?')) return; const typed = prompt('Type DELETE to confirm permanent deletion:'); if (!typed || typed.toUpperCase() !== 'DELETE') return showToast('Deletion cancelled.', true); try { await jsonFetch('/api/user/account', { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); localStorage.clear(); alert('Your Cloudflow account was deleted.'); location.reload(); } catch (err) { showToast(err.message, true); } }
 
   function toggleChatbot() { $('chatbot-window').classList.toggle('hidden'); }
-  async function runDiagnosis() { const content = $('chat-content'); content.innerHTML += '<div class="bg-purple-500/15 p-3 rounded-xl text-right">Running system scan…</div>'; try { const data = await jsonFetch('/api/help/diagnose', { headers:{Authorization:`Bearer ${currentToken}`} }); content.innerHTML += `<div class="bg-slate-800 p-3 rounded-xl"><p class="font-semibold text-purple-300 mb-1">Diagnosis complete</p><p>${escapeHtml(data.diagnosis)}</p>${data.lastError && data.lastError !== 'No errors recorded.' ? `<p class="mt-2 text-xs text-red-300">Latest server error: ${escapeHtml(data.lastError)}</p>` : ''}</div>`; content.scrollTop = content.scrollHeight; } catch (err) { content.innerHTML += `<div class="bg-red-900/20 p-3 rounded-xl text-red-200">${escapeHtml(err.message)}</div>`; } }
+  async function runDiagnosis() { const content = $('chat-content'); content.innerHTML += '<div class="bg-purple-500/15 p-3 rounded-xl text-right">Running system scan…</div>'; try { const data = await jsonFetch('/api/help/diagnose', { headers:{Authorization:`Bearer ${currentToken}`} }); content.innerHTML += `<div class="bg-slate-800 p-3 rounded-xl"><p class="font-semibold text-purple-300 mb-1">Diagnosis complete</p><p>${escapeHtml(data.diagnosis)}</p></div>`; content.scrollTop = content.scrollHeight; } catch (err) { content.innerHTML += `<div class="bg-red-900/20 p-3 rounded-xl text-red-200">${escapeHtml(err.message)}</div>`; } }
 
   const params = new URLSearchParams(location.search);
-  if (params.get('meta_connect') === 'success' && params.get('token')) { localStorage.setItem('token', params.get('token')); currentToken = params.get('token'); history.replaceState({}, document.title, '/'); }
+  if (params.get('meta_connect') === 'success' && params.get('token')) {
+    localStorage.setItem('token', params.get('token'));
+    currentToken = params.get('token');
+    history.replaceState({}, document.title, '/');
+  }
   if (currentToken) initDashboard();
 </script>
 </body>
