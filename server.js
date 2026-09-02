@@ -26,7 +26,7 @@ const redis = new Redis({
 // =============================================================================
 
 const PORT = process.env.PORT || 10000;
-const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v20.0';
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v26.0';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://cloudflow-app.onrender.com').replace(/\/$/, '');
 const REDIRECT_URI = process.env.META_REDIRECT_URI || `${PUBLIC_BASE_URL}/api/auth/instagram/callback`;
 const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'my_secret_token_123').trim();
