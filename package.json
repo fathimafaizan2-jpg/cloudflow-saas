@@ -1,9 +1,10 @@
 {
   "name": "cloudflow-saas",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Instagram Automation SaaS",
+  "main": "server.js",
   "scripts": {
+    "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -15,7 +16,7 @@
     "@upstash/redis": "^1.38.0",
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
+    "express": "^4.18.2",
     "jsonwebtoken": "^9.0.3",
     "stripe": "^22.3.2"
   }

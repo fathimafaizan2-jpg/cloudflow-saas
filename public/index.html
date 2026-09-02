@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<<<<<<< HEAD
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cloudflow | Instagram Automation</title>
@@ -244,5 +245,210 @@
   if (params.get('meta_connect') === 'success' && params.get('token')) { localStorage.setItem('token', params.get('token')); currentToken = params.get('token'); history.replaceState({}, document.title, '/'); }
   if (currentToken) initDashboard();
 </script>
+=======
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="google-site-verification" content="vfLJHFzOo42gKzZ3HFsPERN_5YKY-AmlGGm7if3MrLo"/>
+    <title>Cloudflow | Instagram Automation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .hidden { display: none; }
+        .post-card:hover img { opacity: 0.8; }
+        .selected-post { border-color: #a855f7 !important; background: #3b0764 !important; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white font-sans">
+    <div class="container mx-auto px-4 py-10 max-w-5xl">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-10">
+            <h1 class="text-3xl font-bold text-purple-500 tracking-tight">Cloudflow</h1>
+            <button id="logoutBtn" class="hidden bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-bold transition">Logout</button>
+        </header>
+
+        <!-- Auth Section -->
+        <section id="authSection" class="bg-gray-800 p-8 rounded-xl shadow-2xl max-w-md mx-auto border border-gray-700">
+            <div id="loginForm">
+                <h2 class="text-2xl mb-6 font-bold text-center">Login</h2>
+                <div class="space-y-4">
+                    <input type="email" id="email" placeholder="Email" class="w-full p-3 bg-gray-700 rounded border border-gray-600 focus:outline-none focus:border-purple-500 transition">
+                    <input type="password" id="password" placeholder="Password" class="w-full p-3 bg-gray-700 rounded border border-gray-600 focus:outline-none focus:border-purple-500 transition">
+                    <button onclick="login()" class="w-full bg-purple-600 hover:bg-purple-700 p-3 rounded font-bold transition transform active:scale-95">Login</button>
+                </div>
+                <p class="mt-6 text-sm text-gray-400 text-center">Don't have an account? <a href="#" class="text-purple-400 hover:underline">Sign Up</a></p>
+            </div>
+        </section>
+
+        <!-- Dashboard Section -->
+        <section id="dashboardSection" class="hidden animate-fade-in">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                
+                <!-- Sidebar: Accounts -->
+                <div class="lg:col-span-3 space-y-6">
+                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+                        <h2 class="text-sm font-bold uppercase text-gray-500 mb-4 tracking-widest">Connected Accounts</h2>
+                        <div id="accountsList" class="space-y-3"></div>
+                        <button onclick="connectInstagram()" class="mt-6 w-full bg-blue-600 hover:bg-blue-700 p-3 rounded text-xs font-bold transition flex items-center justify-center gap-2">
+                            <span>Connect Instagram</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Main Content -->
+                <div class="lg:col-span-9 space-y-8">
+                    
+                    <!-- 1. Post Selector -->
+                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="text-xl font-bold">1. Select a Post</h2>
+                            <button onclick="fetchPosts()" class="text-xs bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-full transition">Refresh Content</button>
+                        </div>
+                        <div id="postsGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 max-h-80 overflow-y-auto p-2 bg-gray-900 rounded-lg border border-gray-800">
+                            <p class="text-gray-500 text-sm col-span-full text-center py-10">Click "Refresh Content" to load your Instagram posts</p>
+                        </div>
+                    </div>
+
+                    <!-- 2. Create Rule -->
+                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+                        <h2 class="text-xl font-bold mb-6">2. Set Automation Rule</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1 uppercase font-bold">Selected Media ID</label>
+                                <input type="text" id="mediaId" placeholder="Click a post above..." class="w-full p-3 bg-gray-900 rounded border border-gray-700 text-purple-400 font-mono text-sm" readonly>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1 uppercase font-bold">Trigger Keyword</label>
+                                <input type="text" id="keyword" placeholder="e.g. LINK" class="w-full p-3 bg-gray-700 rounded border border-gray-600 focus:border-purple-500 outline-none">
+                            </div>
+                        </div>
+                        <div class="mb-6">
+                            <label class="block text-xs text-gray-500 mb-1 uppercase font-bold">Automated Response</label>
+                            <textarea id="responseText" placeholder="What should the bot say?" class="w-full p-3 bg-gray-700 rounded border border-gray-600 h-28 focus:border-purple-500 outline-none"></textarea>
+                        </div>
+                        <button onclick="saveRule()" class="w-full bg-purple-600 hover:bg-purple-700 p-4 rounded-lg font-bold text-lg transition transform active:scale-95 shadow-lg shadow-purple-900/20">Save Automation</button>
+                    </div>
+
+                    <!-- 3. Active Rules -->
+                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+                        <h2 class="text-xl font-bold mb-6">Active Automations</h2>
+                        <div id="rulesList" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('token');
+
+        async function apiFetch(path, options = {}) {
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            const res = await fetch(path, { ...options, headers });
+            if (res.status === 401 || res.status === 403) logout();
+            return res.json();
+        }
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const data = await apiFetch('/api/login', {
+                method: 'POST',
+                body: JSON.stringify({ email, password })
+            });
+            if (data.token) {
+                token = data.token;
+                localStorage.setItem('token', token);
+                showDashboard();
+            } else { alert(data.error || 'Login failed'); }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            location.reload();
+        }
+
+        function connectInstagram() {
+            window.location.href = `/api/auth/instagram?token=${token}`;
+        }
+
+        async function showDashboard() {
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('dashboardSection').classList.remove('hidden');
+            document.getElementById('logoutBtn').classList.remove('hidden');
+            loadData();
+        }
+
+        async function loadData() {
+            const { accounts } = await apiFetch('/api/instagram/accounts');
+            const { postRules } = await apiFetch('/api/dashboard-data');
+            
+            const accList = document.getElementById('accountsList');
+            accList.innerHTML = accounts.length ? accounts.map(a => `
+                <div class="p-3 bg-gray-900 rounded-lg border border-gray-700 text-xs flex flex-col gap-1">
+                    <span class="font-bold text-blue-400">@${a.igUsername}</span>
+                    <span class="text-gray-500">${a.pageName || 'Facebook Page'}</span>
+                </div>
+            `).join('') : '<p class="text-gray-500 text-xs">No accounts connected.</p>';
+
+            const rList = document.getElementById('rulesList');
+            const rules = Object.values(postRules || {});
+            rList.innerHTML = rules.length ? rules.map(r => `
+                <div class="p-4 bg-gray-900 rounded-xl border border-gray-700 relative group">
+                    <div class="flex justify-between items-start mb-2">
+                        <span class="bg-purple-900/50 text-purple-300 px-2 py-1 rounded text-[10px] font-bold border border-purple-700/50">KEYWORD: ${r.keyword}</span>
+                    </div>
+                    <p class="text-gray-300 text-sm line-clamp-2 mb-3">"${r.responseText}"</p>
+                    <div class="text-[10px] text-gray-600 font-mono">Media: ${r.mediaId}</div>
+                </div>
+            `).join('') : '<p class="text-gray-500 text-sm col-span-full">No active rules found.</p>';
+        }
+
+        async function fetchPosts() {
+            const accountsMap = await apiFetch('/api/instagram/accounts');
+            if (!accountsMap.accounts || !accountsMap.accounts.length) return alert("Please connect Instagram first.");
+            
+            const pageId = accountsMap.accounts[0].pageId;
+            const grid = document.getElementById('postsGrid');
+            grid.innerHTML = '<p class="text-gray-500 text-sm col-span-full text-center py-10">Loading posts...</p>';
+
+            const data = await apiFetch(`/api/instagram/posts?pageId=${pageId}`);
+            grid.innerHTML = data.posts.map(post => `
+                <div onclick="selectPost(this, '${post.id}')" class="post-card cursor-pointer border border-gray-700 p-1 rounded-lg bg-gray-800 transition hover:scale-[1.02]">
+                    <img src="${post.thumbnail_url || post.media_url}" class="w-full h-28 object-cover rounded-md">
+                    <p class="text-[9px] p-1 truncate text-gray-400">${post.caption || 'No caption'}</p>
+                </div>
+            `).join('');
+        }
+
+        function selectPost(el, id) {
+            document.querySelectorAll('.post-card').forEach(c => c.classList.remove('selected-post'));
+            el.classList.add('selected-post');
+            document.getElementById('mediaId').value = id;
+        }
+
+        async function saveRule() {
+            const mediaId = document.getElementById('mediaId').value;
+            const keyword = document.getElementById('keyword').value;
+            const responseText = document.getElementById('responseText').value;
+
+            if (!mediaId || !keyword || !responseText) return alert("Please select a post and fill all fields.");
+
+            const res = await apiFetch('/api/rules/post', {
+                method: 'POST',
+                body: JSON.stringify({ mediaId, keyword, responseText })
+            });
+
+            if (res.success) {
+                alert("✅ Automation saved successfully!");
+                loadData();
+            } else {
+                alert("❌ Error: " + (res.error || "Could not save rule"));
+            }
+        }
+
+        if (token) showDashboard();
+        document.getElementById('logoutBtn').onclick = logout;
+    </script>
+>>>>>>> e09eed7732a3a7bc51e4a6425bd15d8eb90697b4
 </body>
 </html>
