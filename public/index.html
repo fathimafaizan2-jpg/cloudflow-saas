@@ -1,269 +1,139 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cloudflow | Instagram Automation</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-  <style>
-    :root { color-scheme: dark; }
-    body { background:#0b1020; color:#eef2ff; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    .glass { background:rgba(20,29,52,.78); backdrop-filter:blur(18px); border:1px solid rgba(148,163,184,.16); }
-    .soft-card { background:linear-gradient(145deg,rgba(30,41,70,.92),rgba(15,23,42,.88)); border:1px solid rgba(148,163,184,.14); }
-    .btn-primary { background:linear-gradient(135deg,#8b5cf6,#d946ef); transition:.2s ease; }
-    .btn-primary:hover { transform:translateY(-1px); box-shadow:0 10px 30px rgba(168,85,247,.28); }
-    .btn-secondary { background:#24304a; border:1px solid rgba(148,163,184,.18); }
-    .btn-secondary:hover { background:#303d5d; }
-    .danger-btn { background:#7f1d1d; border:1px solid #ef4444; }
-    .danger-btn:hover { background:#991b1b; }
-    .field { width:100%; background:#111a30; border:1px solid #334155; border-radius:.85rem; padding:.75rem 1rem; outline:none; }
-    .field:focus { border-color:#a855f7; box-shadow:0 0 0 3px rgba(168,85,247,.12); }
-    .modal-backdrop { background:rgba(2,6,23,.82); }
-    .hidden { display:none !important; }
-    .animate-in { animation:fadeIn .25s ease-out; }
-    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-    .glow { box-shadow:0 0 70px rgba(139,92,246,.13); }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloudflow | Instagram Automation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .hidden { display: none; }
+    </style>
 </head>
-<body class="min-h-screen flex flex-col">
-  <nav class="glass sticky top-0 z-40 px-5 sm:px-8 py-4 flex items-center justify-between">
-    <a href="/" class="flex items-center gap-3">
-      <span class="w-10 h-10 rounded-xl btn-primary flex items-center justify-center"><i class="fa-solid fa-bolt text-lg"></i></span>
-      <span class="text-xl sm:text-2xl font-bold tracking-tight">Cloudflow</span>
-      <span class="hidden sm:inline text-xs text-purple-300 border border-purple-400/30 rounded-full px-2 py-1">Founder Preview</span>
-    </a>
-    <div id="user-section" class="hidden items-center gap-3">
-      <span id="user-email" class="hidden md:inline text-sm text-slate-400"></span>
-      <button onclick="openSettings()" class="btn-secondary rounded-lg px-3 py-2 text-sm"><i class="fa-solid fa-sliders mr-2"></i>Settings</button>
-      <button onclick="logout()" class="text-sm text-slate-400 hover:text-white">Logout</button>
-    </div>
-  </nav>
+<body class="bg-gray-900 text-white font-sans">
+    <div class="container mx-auto px-4 py-10 max-w-4xl">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-10">
+            <h1 class="text-3xl font-bold text-purple-500">Cloudflow</h1>
+            <button id="logoutBtn" class="hidden bg-red-600 hover:bg-red-700 px-4 py-2 rounded">Logout</button>
+        </header>
 
-  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">
-    <section id="auth-section" class="max-w-md mx-auto mt-12 sm:mt-20 animate-in">
-      <div class="soft-card rounded-3xl p-7 sm:p-9 glow">
-        <div class="text-center mb-7">
-          <p class="text-purple-300 text-sm font-semibold mb-2">INSTAGRAM AUTOMATION, SIMPLIFIED</p>
-          <h1 class="text-3xl font-bold">Welcome to Cloudflow</h1>
-          <p class="text-slate-400 mt-3">Build reliable comment-to-DM automations from one workspace.</p>
-        </div>
-        <div id="auth-form" class="space-y-4">
-          <input id="auth-email" type="email" autocomplete="email" placeholder="Email address" class="field">
-          <input id="auth-password" type="password" autocomplete="current-password" placeholder="Password (8+ characters)" class="field">
-          <button onclick="handleAuth('login')" class="w-full btn-primary rounded-xl py-3 font-semibold">Sign in</button>
-          <button onclick="handleAuth('signup')" class="w-full btn-secondary rounded-xl py-3 font-semibold">Create account</button>
-          <p id="auth-message" class="text-sm text-center text-slate-400 min-h-5"></p>
-        </div>
-        <div id="twofa-login" class="hidden space-y-4 animate-in">
-          <div class="rounded-2xl bg-purple-500/10 border border-purple-400/20 p-4 text-sm text-slate-300">
-            <i class="fa-solid fa-shield-halved text-purple-300 mr-2"></i>Two-factor authentication is enabled. Enter the six-digit code from your authenticator app.
-          </div>
-          <input id="login-2fa-code" inputmode="numeric" maxlength="6" placeholder="123456" class="field text-center tracking-[.4em]">
-          <button onclick="complete2faLogin()" class="w-full btn-primary rounded-xl py-3 font-semibold">Verify and continue</button>
-          <button onclick="cancel2faLogin()" class="w-full text-sm text-slate-400 hover:text-white">Back to sign in</button>
-          <p id="twofa-message" class="text-sm text-center text-slate-400 min-h-5"></p>
-        </div>
-      </div>
-    </section>
-
-    <section id="dashboard-section" class="hidden space-y-8 animate-in">
-      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
-        <div>
-          <p class="text-purple-300 text-sm font-semibold tracking-wide">AUTOMATION WORKSPACE</p>
-          <h1 class="text-3xl sm:text-4xl font-bold mt-1">Turn comments into conversations.</h1>
-          <p class="text-slate-400 mt-2 max-w-2xl">Connect an Instagram professional account, choose a post, and define the message Cloudflow sends when the keyword is detected.</p>
-        </div>
-        <div class="flex items-center gap-3">
-          <span class="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-400/20 rounded-full px-3 py-2"><i class="fa-solid fa-circle-check mr-1"></i>Workspace ready</span>
-          <button onclick="openSettings()" class="btn-secondary rounded-xl px-4 py-2.5 text-sm"><i class="fa-solid fa-gear mr-2"></i>Account</button>
-        </div>
-      </div>
-
-      <div class="glass rounded-3xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div class="flex gap-4 items-start">
-          <div class="w-12 h-12 rounded-2xl bg-pink-500/15 text-pink-300 flex items-center justify-center shrink-0"><i class="fa-brands fa-instagram text-2xl"></i></div>
-          <div><h2 class="text-xl font-semibold">Connect your brand</h2><p class="text-slate-400 mt-1">Link your Instagram Business or Creator account to load posts and activate automations.</p></div>
-        </div>
-        <button onclick="connectMeta()" class="btn-primary rounded-xl px-6 py-3.5 font-semibold whitespace-nowrap"><i class="fa-brands fa-facebook mr-2"></i>Connect Instagram</button>
-      </div>
-
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div class="soft-card rounded-2xl p-5"><p class="text-slate-400 text-sm">Connected accounts</p><p id="stat-accounts" class="text-2xl font-bold mt-2">0</p><p class="text-xs text-slate-500 mt-1">Instagram profiles</p></div>
-        <div class="soft-card rounded-2xl p-5"><p class="text-slate-400 text-sm">Active rules</p><p id="stat-rules" class="text-2xl font-bold mt-2">0</p><p class="text-xs text-slate-500 mt-1">Keyword automations</p></div>
-        <div class="soft-card rounded-2xl p-5"><p class="text-slate-400 text-sm">Plan</p><p class="text-2xl font-bold mt-2">Preview</p><p class="text-xs text-purple-300 mt-1">Billing after verification</p></div>
-        <div class="soft-card rounded-2xl p-5"><p class="text-slate-400 text-sm">Security</p><p id="stat-security" class="text-2xl font-bold mt-2">Basic</p><p class="text-xs text-slate-500 mt-1">Enable 2FA in Settings</p></div>
-      </div>
-
-      <div class="grid lg:grid-cols-3 gap-7">
-        <div class="lg:col-span-1 space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-lg font-semibold"><i class="fa-solid fa-layer-group text-purple-300 mr-2"></i>Select account</h2>
-            <button onclick="loadAccounts()" class="text-xs text-purple-400 hover:text-white transition"><i class="fa-solid fa-rotate mr-1"></i>Refresh</button>
-          </div>
-          <div class="glass rounded-2xl p-5">
-            <select id="account-select" onchange="loadPosts()" class="field"><option value="">-- Choose connected account --</option></select>
-            <div id="account-empty" class="text-sm text-slate-500 mt-4">No account is connected yet. Use the button above to begin.</div>
-          </div>
-          <div class="soft-card rounded-2xl p-5">
-            <div class="flex items-center justify-between"><h3 class="font-semibold">Premium roadmap</h3><i class="fa-solid fa-sparkles text-amber-300"></i></div>
-            <div class="space-y-3 mt-4 text-sm text-slate-300">
-              <p><i class="fa-solid fa-check text-emerald-300 mr-2"></i>Keyword automations</p>
-              <p><i class="fa-solid fa-check text-emerald-300 mr-2"></i>Diagnostics and human support</p>
-              <p><i class="fa-solid fa-clock text-amber-300 mr-2"></i>Analytics and billing coming next</p>
+        <!-- Auth Section -->
+        <section id="authSection" class="bg-gray-800 p-8 rounded-lg shadow-xl max-w-md mx-auto">
+            <div id="loginForm">
+                <h2 class="text-xl mb-6 font-semibold">Login to Cloudflow</h2>
+                <input type="email" id="email" placeholder="Email" class="w-full p-3 mb-4 bg-gray-700 rounded border border-gray-600 focus:outline-none focus:border-purple-500">
+                <input type="password" id="password" placeholder="Password" class="w-full p-3 mb-6 bg-gray-700 rounded border border-gray-600 focus:outline-none focus:border-purple-500">
+                <button onclick="login()" class="w-full bg-purple-600 hover:bg-purple-700 p-3 rounded font-bold transition">Login</button>
+                <p class="mt-4 text-sm text-gray-400 text-center">Don't have an account? <a href="#" onclick="toggleAuth()" class="text-purple-400">Sign Up</a></p>
             </div>
-            <button onclick="showToast('Payments can be added after Meta verification without changing your automation data.')" class="w-full btn-secondary rounded-xl py-2.5 mt-5 text-sm">View planned upgrades</button>
-          </div>
-        </div>
+        </section>
 
-        <div class="lg:col-span-2 space-y-4">
-          <div class="flex items-center justify-between"><h2 class="text-lg font-semibold"><i class="fa-solid fa-images text-purple-300 mr-2"></i>Choose a post</h2><span class="text-xs text-slate-500">Click a post to create a rule</span></div>
-          <div id="posts-grid" class="grid grid-cols-2 sm:grid-cols-3 gap-4 min-h-[260px] glass rounded-2xl p-5">
-            <div class="col-span-full flex items-center justify-center text-slate-500 py-16">Select a connected account to load posts.</div>
-          </div>
-        </div>
-      </div>
+        <!-- Dashboard Section -->
+        <section id="dashboardSection" class="hidden">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Sidebar: Accounts -->
+                <div class="bg-gray-800 p-6 rounded-lg h-fit">
+                    <h2 class="text-lg font-bold mb-4 border-b border-gray-700 pb-2">Connected Accounts</h2>
+                    <div id="accountsList" class="space-y-3"></div>
+                    <button onclick="connectInstagram()" class="mt-6 w-full bg-blue-600 hover:bg-blue-700 p-2 rounded text-sm font-bold">Connect Instagram</button>
+                </div>
 
-      <div class="space-y-4">
-        <div class="flex items-center justify-between"><h2 class="text-lg font-semibold"><i class="fa-solid fa-robot text-purple-300 mr-2"></i>Active automations</h2><span id="rules-count-label" class="text-xs text-slate-500"></span></div>
-        <div id="rules-list" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
-      </div>
-    </section>
-  </main>
+                <!-- Main: Posts & Rules -->
+                <div class="md:col-span-2 space-y-6">
+                    <div class="bg-gray-800 p-6 rounded-lg">
+                        <h2 class="text-lg font-bold mb-4">Create Automation Rule</h2>
+                        <div class="space-y-4">
+                            <input type="text" id="mediaId" placeholder="Instagram Media ID" class="w-full p-2 bg-gray-700 rounded border border-gray-600">
+                            <input type="text" id="keyword" placeholder="Keyword (e.g. LINK)" class="w-full p-2 bg-gray-700 rounded border border-gray-600">
+                            <textarea id="responseText" placeholder="Automated Response Message" class="w-full p-2 bg-gray-700 rounded border border-gray-600 h-24"></textarea>
+                            <button onclick="saveRule()" class="bg-purple-600 hover:bg-purple-700 px-6 py-2 rounded font-bold">Save Rule</button>
+                        </div>
+                    </div>
 
-  <footer class="glass mt-10 py-7 text-center text-slate-500 text-sm">
-    <div class="flex justify-center gap-6 mb-3"><a href="/privacy.html" class="hover:text-purple-300">Privacy Policy</a><a href="/terms.html" class="hover:text-purple-300">Terms of Service</a><a href="/deletion.html" class="hover:text-purple-300">Deletion Policy</a></div>
-    <p>© 2026 Cloudflow Automation · Founder Preview</p>
-  </footer>
-
-  <!-- Chatbot Floating Button -->
-  <div class="fixed bottom-24 right-6 z-[60]">
-    <button onclick="toggleChatbot()" class="w-16 h-16 btn-primary rounded-full shadow-2xl flex items-center justify-center text-2xl hover:scale-110 transition shadow-[0_0_30px_rgba(139,92,246,0.6)] border-2 border-white/20"><i class="fa-solid fa-robot"></i></button>
-    <div id="chatbot-window" class="hidden absolute bottom-20 right-0 w-[min(24rem,calc(100vw-2rem))] glass rounded-3xl shadow-2xl overflow-hidden border border-purple-500/40">
-      <div class="btn-primary p-4 flex items-center justify-between"><span class="font-semibold"><i class="fa-solid fa-robot mr-2"></i>Cloudflow Support</span><button onclick="toggleChatbot()"><i class="fa-solid fa-xmark"></i></button></div>
-      <div id="chat-content" class="p-4 h-64 overflow-y-auto space-y-3 text-sm bg-slate-950/35"><div class="bg-slate-800 p-3 rounded-xl">Run a system scan to check your connection, rules, and most recent Meta error.</div></div>
-      <div class="p-3 border-t border-slate-700 flex gap-2"><button onclick="runDiagnosis()" class="flex-1 btn-primary py-2 rounded-lg text-xs font-bold uppercase tracking-wider">Run system scan</button><a href="mailto:support@cloudflow.com?subject=Cloudflow%20support" class="btn-secondary px-3 py-2 rounded-lg text-xs">HUMAN</a></div>
+                    <div class="bg-gray-800 p-6 rounded-lg">
+                        <h2 class="text-lg font-bold mb-4">Active Rules</h2>
+                        <div id="rulesList" class="space-y-4 text-sm"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
     </div>
-  </div>
 
-  <div id="rule-modal" class="hidden fixed inset-0 z-50 modal-backdrop items-center justify-center p-4">
-    <div class="glass rounded-3xl max-w-md w-full p-7 space-y-5 animate-in">
-      <div class="flex justify-between items-center"><h2 class="text-2xl font-bold">Create automation</h2><button onclick="closeModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button></div>
-      <div id="modal-preview" class="w-full aspect-video rounded-2xl overflow-hidden bg-slate-900"></div>
-      <input id="modal-keyword" type="text" placeholder="Trigger keyword, e.g. LINK" class="field">
-      <textarea id="modal-response" rows="4" placeholder="Message Cloudflow should send…" class="field"></textarea>
-      <div class="flex gap-3"><button onclick="closeModal()" class="flex-1 btn-secondary rounded-xl py-3">Cancel</button><button onclick="saveRule()" class="flex-1 btn-primary rounded-xl py-3 font-semibold">Save rule</button></div>
-    </div>
-  </div>
+    <script>
+        let token = localStorage.getItem('token');
 
-  <div id="settings-modal" class="hidden fixed inset-0 z-50 modal-backdrop items-center justify-center p-4">
-    <div class="glass rounded-3xl max-w-lg w-full p-7 space-y-6 animate-in max-h-[90vh] overflow-y-auto">
-      <div class="flex justify-between items-center"><div><p class="text-purple-300 text-xs font-semibold">ACCOUNT CONTROL CENTER</p><h2 class="text-2xl font-bold mt-1">Settings</h2></div><button onclick="closeSettings()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button></div>
-      <div class="soft-card rounded-2xl p-4"><p class="text-sm text-slate-400">Signed in as</p><p id="settings-email" class="font-semibold mt-1"></p></div>
-      <div class="space-y-3"><h3 class="font-semibold"><i class="fa-solid fa-key text-purple-300 mr-2"></i>Update password</h3><input id="new-password" type="password" placeholder="New password (8+ characters)" class="field"><button onclick="updatePassword()" class="btn-secondary rounded-xl px-4 py-2.5 text-sm">Save password</button><p id="password-message" class="text-xs text-slate-400"></p></div>
-      <div class="border-t border-slate-700 pt-5 space-y-3"><div class="flex items-center justify-between"><h3 class="font-semibold"><i class="fa-solid fa-shield-halved text-emerald-300 mr-2"></i>Two-factor authentication</h3><span id="tfa-status" class="text-xs text-slate-400"></span></div><p class="text-sm text-slate-400">Use an authenticator app such as Google Authenticator, Microsoft Authenticator, or 1Password.</p><button id="start-2fa-btn" onclick="start2FA()" class="btn-secondary rounded-xl px-4 py-2.5 text-sm">Set up 2FA</button><div id="tfa-setup" class="hidden soft-card rounded-2xl p-4 space-y-3"><p class="text-xs text-slate-400">Add this secret to your authenticator app:</p><code id="tfa-secret" class="block bg-slate-950 rounded-lg p-3 text-amber-300 break-all tracking-wider"></code><p class="text-xs text-slate-500">If your app supports it, use this URI:</p><code id="tfa-uri" class="block bg-slate-950 rounded-lg p-3 text-xs text-slate-300 break-all"></code><input id="tfa-code" inputmode="numeric" maxlength="6" placeholder="Enter the current 6-digit code" class="field text-center tracking-[.35em]"><button onclick="verify2FA()" class="btn-primary rounded-xl px-4 py-2.5 text-sm font-semibold">Verify and enable</button></div><div id="tfa-disable" class="hidden flex gap-2"><input id="disable-tfa-code" inputmode="numeric" maxlength="6" placeholder="6-digit code" class="field"><button onclick="disable2FA()" class="danger-btn rounded-xl px-4 py-2 text-sm whitespace-nowrap">Disable</button></div><p id="tfa-message" class="text-xs text-slate-400"></p></div>
-      <div class="border-t border-slate-700 pt-5"><h3 class="font-semibold text-red-300"><i class="fa-solid fa-triangle-exclamation mr-2"></i>Danger zone</h3><p class="text-sm text-slate-400 mt-2">Deleting your Cloudflow account removes your login, rules, saved connection metadata, and stored tokens from Cloudflow. It does not delete your Facebook Page or Instagram account.</p><button onclick="deleteAccount()" class="danger-btn rounded-xl px-4 py-2.5 mt-4 text-sm font-semibold">Delete my Cloudflow account</button></div>
-    </div>
-  </div>
+        async function apiFetch(path, options = {}) {
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            const res = await fetch(path, { ...options, headers });
+            if (res.status === 401 || res.status === 403) logout();
+            return res.json();
+        }
 
-  <div id="toast" class="hidden fixed top-20 right-5 z-[70] max-w-sm rounded-xl px-4 py-3 glass text-sm shadow-xl"></div>
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const data = await apiFetch('/api/login', {
+                method: 'POST',
+                body: JSON.stringify({ email, password })
+            });
+            if (data.token) {
+                token = data.token;
+                localStorage.setItem('token', token);
+                showDashboard();
+            } else {
+                alert(data.error || 'Login failed');
+            }
+        }
 
-<script>
-  let currentToken = localStorage.getItem('token');
-  let pending2faToken = null;
-  let selectedMedia = null;
+        function logout() {
+            localStorage.removeItem('token');
+            location.reload();
+        }
 
-  const $ = id => document.getElementById(id);
-  function showToast(message, error = false) { const el = $('toast'); el.textContent = message; el.className = `fixed top-20 right-5 z-[70] max-w-sm rounded-xl px-4 py-3 glass text-sm shadow-xl ${error ? 'border border-red-400/40 text-red-200' : 'border border-emerald-400/30 text-emerald-200'}`; setTimeout(() => el.classList.add('hidden'), 4200); }
-  async function jsonFetch(url, options = {}) { const response = await fetch(url, options); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'Request failed'); return data; }
+        function connectInstagram() {
+            window.location.href = `/api/auth/instagram?token=${token}`;
+        }
 
-  async function handleAuth(type) {
-    const email = $('auth-email').value.trim(); const password = $('auth-password').value;
-    if (!email || password.length < 8) { $('auth-message').textContent = 'Enter a valid email and a password of at least 8 characters.'; return; }
-    $('auth-message').textContent = 'Please wait…';
-    try {
-      const data = await jsonFetch(`/api/${type}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ email, password }) });
-      if (data.requires2fa) { pending2faToken = data.pendingToken; $('auth-form').classList.add('hidden'); $('twofa-login').classList.remove('hidden'); $('twofa-message').textContent = 'Enter your authenticator code.'; return; }
-      completeSession(data);
-    } catch (err) { $('auth-message').textContent = err.message; }
-  }
-  async function complete2faLogin() {
-    const code = $('login-2fa-code').value.trim();
-    try { completeSession(await jsonFetch('/api/login/2fa', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ pendingToken:pending2faToken, code }) })); } catch (err) { $('twofa-message').textContent = err.message; }
-  }
-  function cancel2faLogin() { pending2faToken = null; $('twofa-login').classList.add('hidden'); $('auth-form').classList.remove('hidden'); $('twofa-message').textContent = ''; }
-  function completeSession(data) { currentToken = data.token; localStorage.setItem('token', currentToken); localStorage.setItem('user', JSON.stringify(data.user || {})); initDashboard(); }
-  function logout() { localStorage.clear(); location.reload(); }
+        async function showDashboard() {
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('dashboardSection').classList.remove('hidden');
+            document.getElementById('logoutBtn').classList.remove('hidden');
+            loadData();
+        }
 
-  async function initDashboard() {
-    if (!currentToken) return;
-    $('auth-section').classList.add('hidden'); $('dashboard-section').classList.remove('hidden'); $('user-section').classList.remove('hidden'); $('user-section').classList.add('flex');
-    const savedUser = JSON.parse(localStorage.getItem('user') || '{}'); $('user-email').textContent = savedUser.email || '';
-    try { await loadAccounts(); await loadRules(); } catch (err) { showToast(err.message, true); }
-  }
-  async function loadAccounts() {
-    try {
-      const data = await jsonFetch('/api/instagram/accounts', { headers:{Authorization:`Bearer ${currentToken}`} });
-      const select = $('account-select'); select.innerHTML = '<option value="">-- Choose connected account --</option>';
-      if (data.accounts && data.accounts.length > 0) {
-        data.accounts.forEach(acc => { const option = document.createElement('option'); option.value = acc.pageId; option.textContent = acc.name; select.appendChild(option); });
-        $('stat-accounts').textContent = data.accounts.length;
-        $('account-empty').classList.add('hidden');
-      } else {
-        $('stat-accounts').textContent = '0';
-        $('account-empty').classList.remove('hidden');
-      }
-    } catch (err) {
-      $('stat-accounts').textContent = '0';
-      $('account-empty').classList.remove('hidden');
-    }
-  }
-  async function loadPosts() {
-    const pageId = $('account-select').value; if (!pageId) return;
-    $('posts-grid').innerHTML = '<div class="col-span-full text-center py-16 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Loading posts…</div>';
-    try {
-      const data = await jsonFetch(`/api/instagram/posts?pageId=${encodeURIComponent(pageId)}`, { headers:{Authorization:`Bearer ${currentToken}`} });
-      if (!data.posts || !data.posts.length) { $('posts-grid').innerHTML = '<div class="col-span-full text-center py-16 text-slate-500">No posts returned for this account.</div>'; return; }
-      $('posts-grid').innerHTML = data.posts.map(post => { const img = post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url; return `<button type="button" onclick="openModal(${JSON.stringify(post).replace(/"/g,'&quot;')})" class="relative group aspect-square rounded-2xl overflow-hidden bg-slate-900 border border-slate-700 hover:border-purple-400 transition"><img src="${img || ''}" class="w-full h-full object-cover group-hover:scale-105 transition" alt="Instagram post"><span class="absolute inset-0 bg-purple-600/20 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"><i class="fa-solid fa-wand-magic-sparkles text-2xl"></i></span></button>`; }).join('');
-    } catch (err) { $('posts-grid').innerHTML = `<div class="col-span-full text-center py-16 text-red-300">${err.message}</div>`; }
-  }
-  async function loadRules() {
-    try {
-      const data = await jsonFetch('/api/dashboard-data', { headers:{Authorization:`Bearer ${currentToken}`} }); const rules = Object.values(data.postRules || {}); $('stat-rules').textContent = rules.length; $('rules-count-label').textContent = `${rules.length} configured`; const list = $('rules-list');
-      if (!rules.length) { list.innerHTML = '<div class="sm:col-span-2 lg:col-span-3 soft-card rounded-2xl p-6 text-slate-500">No automations yet. Choose a post above to create your first keyword rule.</div>'; return; }
-      list.innerHTML = rules.map(rule => `<div class="soft-card rounded-2xl p-4"><div class="flex gap-3 items-center"><img src="${rule.thumbnail || ''}" class="w-12 h-12 rounded-xl object-cover bg-slate-900"><div class="min-w-0 flex-1"><p class="text-xs uppercase tracking-wide text-purple-300 font-bold">Trigger: ${escapeHtml(rule.keyword || '')}</p><p class="text-sm text-slate-300 truncate mt-1">${escapeHtml(rule.responseText || '')}</p></div><button onclick="deleteRule('${encodeURIComponent(rule.mediaId)}')" title="Delete rule" class="text-slate-500 hover:text-red-300"><i class="fa-solid fa-trash"></i></button></div></div>`).join('');
-    } catch (err) { console.warn('Load rules skipped:', err.message); }
-  }
-  function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
-  async function deleteRule(mediaId) { if (!confirm('Delete this automation rule?')) return; try { await jsonFetch(`/api/rules/post/${mediaId}`, { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); await loadRules(); showToast('Automation deleted.'); } catch (err) { showToast(err.message, true); } }
-  function openModal(post) { selectedMedia = post; const img = post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url; $('modal-preview').innerHTML = `<img src="${img || ''}" class="w-full h-full object-cover" alt="Selected post">`; $('modal-keyword').value = ''; $('modal-response').value = ''; $('rule-modal').classList.remove('hidden'); $('rule-modal').classList.add('flex'); }
-  function closeModal() { $('rule-modal').classList.add('hidden'); $('rule-modal').classList.remove('flex'); }
-  async function saveRule() { const keyword = $('modal-keyword').value.trim(); const responseText = $('modal-response').value.trim(); if (!keyword || !responseText || !selectedMedia) { showToast('Add a keyword and response message.', true); return; } try { await jsonFetch('/api/rules/post', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({mediaId:selectedMedia.id,keyword,responseText,thumbnail:selectedMedia.media_type === 'VIDEO' ? selectedMedia.thumbnail_url : selectedMedia.media_url,caption:selectedMedia.caption}) }); closeModal(); await loadRules(); showToast('Automation saved.'); } catch (err) { showToast(err.message, true); } }
+        async function loadData() {
+            const { accounts } = await apiFetch('/api/instagram/accounts');
+            const { postRules } = await apiFetch('/api/dashboard-data');
+            
+            const accList = document.getElementById('accountsList');
+            accList.innerHTML = accounts.map(a => `<div class="p-2 bg-gray-700 rounded text-xs">${a.name}</div>`).join('');
 
-  function connectMeta() {
-    if (!currentToken) return showToast('Sign in first.', true);
-    window.location.href = `/api/auth/instagram?token=${encodeURIComponent(currentToken)}`;
-  }
+            const rList = document.getElementById('rulesList');
+            rList.innerHTML = Object.values(postRules).map(r => `
+                <div class="p-3 bg-gray-700 rounded flex justify-between items-center">
+                    <div>
+                        <span class="text-purple-400 font-bold">#${r.keyword}</span> 
+                        <p class="text-gray-300 mt-1">${r.responseText}</p>
+                        <p class="text-[10px] text-gray-500 mt-1">Media ID: ${r.mediaId}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
 
-  async function openSettings() {
-    $('settings-email').textContent = JSON.parse(localStorage.getItem('user') || '{}').email || '';
-    $('settings-modal').classList.remove('hidden');
-    $('settings-modal').classList.add('flex');
-  }
-  function closeSettings() { $('settings-modal').classList.add('hidden'); $('settings-modal').classList.remove('flex'); }
-  async function updatePassword() { const value = $('new-password').value; if (value.length < 8) { $('password-message').textContent = 'Use at least 8 characters.'; return; } try { await jsonFetch('/api/user/settings', { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${currentToken}`}, body:JSON.stringify({newPassword:value}) }); $('new-password').value = ''; $('password-message').textContent = 'Password updated successfully.'; showToast('Password updated.'); } catch (err) { $('password-message').textContent = err.message; } }
-  async function deleteAccount() { if (!confirm('Delete your Cloudflow account and all saved Cloudflow data?')) return; const typed = prompt('Type DELETE to confirm permanent deletion:'); if (!typed || typed.toUpperCase() !== 'DELETE') return showToast('Deletion cancelled.', true); try { await jsonFetch('/api/user/account', { method:'DELETE', headers:{Authorization:`Bearer ${currentToken}`} }); localStorage.clear(); alert('Your Cloudflow account was deleted.'); location.reload(); } catch (err) { showToast(err.message, true); } }
+        async function saveRule() {
+            const mediaId = document.getElementById('mediaId').value;
+            const keyword = document.getElementById('keyword').value;
+            const responseText = document.getElementById('responseText').value;
+            await apiFetch('/api/rules/post', {
+                method: 'POST',
+                body: JSON.stringify({ mediaId, keyword, responseText })
+            });
+            loadData();
+        }
 
-  function toggleChatbot() { $('chatbot-window').classList.toggle('hidden'); }
-  async function runDiagnosis() { const content = $('chat-content'); content.innerHTML += '<div class="bg-purple-500/15 p-3 rounded-xl text-right">Running system scan…</div>'; try { const data = await jsonFetch('/api/debug/status', { headers:{Authorization:`Bearer ${currentToken}`} }); content.innerHTML += `<div class="bg-slate-800 p-3 rounded-xl"><p class="font-semibold text-purple-300 mb-1">Diagnosis complete</p><p>Status: ${escapeHtml(data.status)}</p><p>Active Rules: ${data.rulesCount}</p><p>Tokens Stored: ${data.tokenKeys ? data.tokenKeys.length : 0}</p></div>`; content.scrollTop = content.scrollHeight; } catch (err) { content.innerHTML += `<div class="bg-red-900/20 p-3 rounded-xl text-red-200">${escapeHtml(err.message)}</div>`; } }
-
-  const params = new URLSearchParams(location.search);
-  if (params.get('meta_connect') === 'success' && params.get('token')) {
-    localStorage.setItem('token', params.get('token'));
-    currentToken = params.get('token');
-    history.replaceState({}, document.title, '/');
-  }
-  if (currentToken) initDashboard();
-</script>
+        if (token) showDashboard();
+        document.getElementById('logoutBtn').onclick = logout;
+    </script>
 </body>
 </html>
