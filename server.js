@@ -1,5 +1,5 @@
 
-Server fixed · TXT
+Server fixed v2 · TXT
 
 require('dotenv').config();
 
@@ -409,7 +409,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
 
     const pagesData = await graphFetch('/me/accounts', {
       token: userAccessToken,
-      params: { fields: 'id,name,access_token,tasks,instagram_business_account' }
+      params: { fields: 'id,name,access_token,instagram_business_account' }
     });
 
     if (!Array.isArray(pagesData.data) || pagesData.data.length === 0) {
@@ -433,7 +433,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
         try {
           const pageData = await graphFetch(`/${pageId}`, {
             token: userAccessToken,
-            params: { fields: 'id,name,access_token,instagram_business_account,tasks' }
+            params: { fields: 'id,name,access_token,instagram_business_account' }
           });
           igId = pageData.instagram_business_account?.id;
         } catch (err) {
