@@ -1,4 +1,4 @@
-equire('dotenv').config();
+require('dotenv').config();
 
 const express = require('express');
 const path = require('path');
@@ -784,9 +784,6 @@ function normalizeWebhookEvent(entry, item) {
   }
 
   // ✅ FIX #2: PAGE FEED COMMENT
-  // BEFORE: mediaId used value.post_id as fallback — this is a Facebook-format ID
-  //         (e.g. "123456_789012") that NEVER matches IG media IDs in your rules.
-  // AFTER:  Store fbPostId separately, resolve it to IG media ID in processWebhookPayload.
   if (item.field === 'feed') {
     const value = item.value || {};
     if (value.item && value.item !== 'comment') return null;
@@ -1038,4 +1035,3 @@ app.listen(PORT, '0.0.0.0', () => {
 
   worker();
 });
- 
