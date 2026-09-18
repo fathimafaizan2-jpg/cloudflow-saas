@@ -343,20 +343,18 @@ app.get('/api/auth/instagram', async (req, res) => {
   }
 });
 
-// ✅ FIX #3: SEND subscribed_fields IN POST BODY (was query param — could silently fail)
-// ✅ FIX #6 (CRITICAL): 'comments' was missing from subscribed_fields.
-// This was the actual cause of "DM works, comment doesn't": Meta was never told to
-// deliver comment webhooks for this page/IG account, regardless of tester status or
-// token scopes — subscribed_fields controls what Meta actually sends per connected
-// account, on top of (not instead of) the app-level Webhooks product config in the
-// App Dashboard, which must ALSO have 'comments' enabled under the Instagram object.
+// ✅ FIX #6: subscribed_fields for /{page-id}/subscribed_apps does NOT accept "comments"
+// — confirmed directly from Meta's own API error (code 100, enumerated valid list).
+// For an Instagram account connected via Facebook Login (this app's flow), comment
+// events on the linked Instagram media are delivered through the Page's "feed" field,
+// which normalizeWebhookEvent() already has a dedicated handler for.
 async function subscribePage(pageId, pageAccessToken) {
   try {
     const result = await graphFetch(`/${pageId}/subscribed_apps`, {
       method: 'POST',
       token: pageAccessToken,
       body: {
-        subscribed_fields: 'messages,messaging_postbacks,messaging_optins,comments'
+        subscribed_fields: 'messages,messaging_postbacks,messaging_optins,feed'
       }
     });
     console.log(`✅ Page webhook subscribed: ${pageId}`, result);
@@ -533,10 +531,10 @@ app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
 });
 
 // ✅ FIX #6: Re-subscribe already-connected pages to the corrected field list
-// (including 'comments') WITHOUT forcing a full Instagram disconnect/reconnect.
-// subscribePage() only ever ran once, at the moment of the original OAuth callback —
-// any account connected before this fix has a stale subscription on Meta's side.
-// Hit this once per connected account after deploying the fix.
+// WITHOUT forcing a full Instagram disconnect/reconnect. subscribePage() only ever
+// ran once, at the moment of the original OAuth callback — any account connected
+// before this fix has a stale subscription on Meta's side. Hit this once per
+// connected account after deploying the fix.
 app.post('/api/debug/resubscribe', authenticateToken, async (req, res) => {
   try {
     const accountsMap = await redis.hgetall(`user_pages:${req.user.id}`);
@@ -783,7 +781,10 @@ function normalizeWebhookEvent(entry, item) {
     };
   }
 
-  // ✅ FIX #2: PAGE FEED COMMENT
+  // ✅ FIX #2: PAGE FEED COMMENT — this is the actual path for Instagram comments
+  // when the account is connected via Facebook Login. "comments"/"live_comments"
+  // above stay in place in case Meta ever accepts them for this endpoint, or in
+  // case you switch to Instagram Login in the future — they're harmless no-ops here.
   if (item.field === 'feed') {
     const value = item.value || {};
     if (value.item && value.item !== 'comment') return null;
