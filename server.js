@@ -1,4 +1,6 @@
 
+Server fixed · TXT
+
 require('dotenv').config();
 
 const express = require('express');
@@ -6,10 +8,12 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const cors = require('cors');
 const { Redis } = require('@upstash/redis');
 
 const app = express();
 
+app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -40,6 +44,14 @@ const REDIRECT_URI =
 const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'my_secret_token_123').trim();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_99';
+
+if (!process.env.VERIFY_TOKEN || !process.env.JWT_SECRET) {
+  console.warn(
+    '⚠️ SECURITY: VERIFY_TOKEN and/or JWT_SECRET are not set in the environment — ' +
+    'using hardcoded fallback values. Set both as real env vars on Render before going live; ' +
+    'anyone who reads this repo can currently forge webhook verification and login sessions.'
+  );
+}
 
 const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
@@ -335,13 +347,19 @@ app.get('/api/auth/instagram', async (req, res) => {
 });
 
 // ✅ FIX #3: SEND subscribed_fields IN POST BODY (was query param — could silently fail)
+// ✅ FIX #6 (CRITICAL): 'comments' was missing from subscribed_fields.
+// This was the actual cause of "DM works, comment doesn't": Meta was never told to
+// deliver comment webhooks for this page/IG account, regardless of tester status or
+// token scopes — subscribed_fields controls what Meta actually sends per connected
+// account, on top of (not instead of) the app-level Webhooks product config in the
+// App Dashboard, which must ALSO have 'comments' enabled under the Instagram object.
 async function subscribePage(pageId, pageAccessToken) {
   try {
     const result = await graphFetch(`/${pageId}/subscribed_apps`, {
       method: 'POST',
       token: pageAccessToken,
       body: {
-        subscribed_fields: 'messages,messaging_postbacks,feed'
+        subscribed_fields: 'messages,messaging_postbacks,messaging_optins,comments'
       }
     });
     console.log(`✅ Page webhook subscribed: ${pageId}`, result);
@@ -514,6 +532,36 @@ app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Load accounts error:', err);
     res.status(500).json({ error: 'Unable to load connected accounts.' });
+  }
+});
+
+// ✅ FIX #6: Re-subscribe already-connected pages to the corrected field list
+// (including 'comments') WITHOUT forcing a full Instagram disconnect/reconnect.
+// subscribePage() only ever ran once, at the moment of the original OAuth callback —
+// any account connected before this fix has a stale subscription on Meta's side.
+// Hit this once per connected account after deploying the fix.
+app.post('/api/debug/resubscribe', authenticateToken, async (req, res) => {
+  try {
+    const accountsMap = await redis.hgetall(`user_pages:${req.user.id}`);
+    const results = [];
+
+    for (const [pageId, value] of Object.entries(accountsMap || {})) {
+      const parsed = safeParse(value);
+      const token = (await redis.hget('page_tokens', pageId)) || FALLBACK_PAGE_TOKEN;
+
+      if (!token) {
+        results.push({ pageId, igId: parsed?.igId, ok: false, error: 'No stored page token' });
+        continue;
+      }
+
+      const result = await subscribePage(pageId, token);
+      results.push({ pageId, igId: parsed?.igId, ok: Boolean(result), meta: result || null });
+    }
+
+    res.json({ results });
+  } catch (err) {
+    console.error('Resubscribe error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -843,10 +891,9 @@ async function processWebhookPayload(payload) {
 
     const events = [];
 
-    if (entry.field === 'comments' || entry.field === 'live_comments') {
-      const event = normalizeWebhookEvent(entry, { field: entry.field, value: entry.value });
-      if (event) events.push(event);
-    }
+    // Note: removed a dead check here that looked for `entry.field` — real Meta
+    // payloads never put `field` on entry itself, only inside entry.changes[].field
+    // (handled by the loop below). The old check could never match anything.
 
     for (const item of entry.messaging || []) {
       const event = normalizeWebhookEvent(entry, item);
@@ -994,3 +1041,4 @@ app.listen(PORT, '0.0.0.0', () => {
 
   worker();
 });
+ 
