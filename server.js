@@ -343,11 +343,10 @@ app.get('/api/auth/instagram', async (req, res) => {
   }
 });
 
-// ✅ FIX #6: subscribed_fields for /{page-id}/subscribed_apps does NOT accept "comments"
-// — confirmed directly from Meta's own API error (code 100, enumerated valid list).
-// For an Instagram account connected via Facebook Login (this app's flow), comment
-// events on the linked Instagram media are delivered through the Page's "feed" field,
-// which normalizeWebhookEvent() already has a dedicated handler for.
+// ✅ FIX #3: SEND subscribed_fields IN POST BODY (was query param — could silently fail)
+// ✅ FIX #6: 'comments' is NOT a valid Page-level field (confirmed via Meta's own
+// error). Using 'feed' instead — the field the app's own comment-parsing logic was
+// originally built around.
 async function subscribePage(pageId, pageAccessToken) {
   try {
     const result = await graphFetch(`/${pageId}/subscribed_apps`, {
@@ -361,7 +360,29 @@ async function subscribePage(pageId, pageAccessToken) {
     return result;
   } catch (err) {
     console.error(`⚠️ Page webhook subscription failed for ${pageId}:`, err.meta || err.message);
-    return null;
+    return { error: err.meta?.message || err.message };
+  }
+}
+
+// ✅ FIX #7: Try subscribing the INSTAGRAM ACCOUNT ID directly (not the Page ID) to
+// 'comments'. Neither Page-level attempt (comments, then feed) delivered anything —
+// this targets the Instagram object directly, which may have its own valid field set
+// distinct from the Page object's. Whatever Meta says here — success or a specific
+// rejected-field error — tells us definitively instead of guessing again.
+async function subscribeInstagramAccount(igId, pageAccessToken) {
+  try {
+    const result = await graphFetch(`/${igId}/subscribed_apps`, {
+      method: 'POST',
+      token: pageAccessToken,
+      body: {
+        subscribed_fields: 'comments,messages,messaging_postbacks'
+      }
+    });
+    console.log(`✅ Instagram account webhook subscribed: ${igId}`, result);
+    return result;
+  } catch (err) {
+    console.error(`⚠️ Instagram account webhook subscription failed for ${igId}:`, err.meta || err.message);
+    return { error: err.meta?.message || err.message };
   }
 }
 
@@ -470,6 +491,7 @@ app.get('/api/auth/instagram/callback', async (req, res) => {
       await redis.set(`ig_for_page:${pageId}`, igId);
 
       await subscribePage(pageId, pageToken);
+      await subscribeInstagramAccount(igId, pageToken);
 
       if (!firstPageToken) firstPageToken = pageToken;
       connected++;
@@ -530,11 +552,9 @@ app.get('/api/instagram/accounts', authenticateToken, async (req, res) => {
   }
 });
 
-// ✅ FIX #6: Re-subscribe already-connected pages to the corrected field list
-// WITHOUT forcing a full Instagram disconnect/reconnect. subscribePage() only ever
-// ran once, at the moment of the original OAuth callback — any account connected
-// before this fix has a stale subscription on Meta's side. Hit this once per
-// connected account after deploying the fix.
+// ✅ FIX #6/#7: Re-subscribe already-connected pages, at BOTH the Page level and the
+// Instagram-account level, and report exactly what Meta said for each — no more
+// digging through Render logs for this specific step.
 app.post('/api/debug/resubscribe', authenticateToken, async (req, res) => {
   try {
     const accountsMap = await redis.hgetall(`user_pages:${req.user.id}`);
@@ -549,8 +569,17 @@ app.post('/api/debug/resubscribe', authenticateToken, async (req, res) => {
         continue;
       }
 
-      const result = await subscribePage(pageId, token);
-      results.push({ pageId, igId: parsed?.igId, ok: Boolean(result), meta: result || null });
+      const pageResult = await subscribePage(pageId, token);
+      const igResult = parsed?.igId ? await subscribeInstagramAccount(parsed.igId, token) : { error: 'No igId stored' };
+
+      results.push({
+        pageId,
+        igId: parsed?.igId,
+        pageSubscribe: pageResult,
+        pageOk: !pageResult?.error,
+        igSubscribe: igResult,
+        igOk: !igResult?.error
+      });
     }
 
     res.json({ results });
@@ -781,10 +810,7 @@ function normalizeWebhookEvent(entry, item) {
     };
   }
 
-  // ✅ FIX #2: PAGE FEED COMMENT — this is the actual path for Instagram comments
-  // when the account is connected via Facebook Login. "comments"/"live_comments"
-  // above stay in place in case Meta ever accepts them for this endpoint, or in
-  // case you switch to Instagram Login in the future — they're harmless no-ops here.
+  // ✅ FIX #2: PAGE FEED COMMENT
   if (item.field === 'feed') {
     const value = item.value || {};
     if (value.item && value.item !== 'comment') return null;
@@ -885,10 +911,6 @@ async function processWebhookPayload(payload) {
     console.log(`📋 Loaded ${rules.length} automation rule(s) for user ${userId}`);
 
     const events = [];
-
-    // Note: removed a dead check here that looked for `entry.field` — real Meta
-    // payloads never put `field` on entry itself, only inside entry.changes[].field
-    // (handled by the loop below). The old check could never match anything.
 
     for (const item of entry.messaging || []) {
       const event = normalizeWebhookEvent(entry, item);
